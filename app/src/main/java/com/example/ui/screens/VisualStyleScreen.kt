@@ -200,16 +200,22 @@ fun VisualStyleScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .testTag("visual_style_screen"),
-        contentPadding = PaddingValues(bottom = 108.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = PaddingValues(bottom = 96.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // 1. MAIN DASHBOARD HEADER & CURRENT CONFIGURATION
+        // 1. COMPACT UNIFIED DASHBOARD & MINI FLOATING CONTROL CARD
         item(key = "visual_style_dashboard_header") {
             VisualStyleDashboardCard(
+                context = context,
                 activePreset = activePreset,
                 adjustments = currentAdjustments,
                 displayTelemetry = displayTelemetry,
                 miniFloatingEnabled = miniFloatingEnabled,
+                onlyInSelectedGames = miniFloatingOnlyInGames,
+                canDrawOverlays = canDrawOverlays,
+                hasUsageAccess = displayTelemetry.hasUsageStatsPermission,
+                selectedGamesCount = selectedFloatingGames.size,
+                presetsCount = presets.size,
                 primaryColor = primaryColor,
                 secondaryColor = secondaryColor,
                 headerGlow = themeCustomization.headerGlowIntensity,
@@ -223,36 +229,7 @@ fun VisualStyleScreen(
                 },
                 onCreatePresetClick = { showCreatePresetDialog = true },
                 onManageGameProfilesClick = { activeSection = VisualStyleSection.GAME_PROFILES },
-                onToggleMiniFloatingClick = {
-                    if (!Settings.canDrawOverlays(context)) {
-                        try {
-                            val intent = Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:${context.packageName}")
-                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            context.startActivity(intent)
-                        } catch (_: Exception) {}
-                        manager.setMiniFloatingEnabled(true)
-                    } else {
-                        manager.setMiniFloatingEnabled(!miniFloatingEnabled)
-                    }
-                }
-            )
-        }
-
-        // 1B. MINI FLOATING VISUAL CONTROL CARD (DRAGON TOOL LOGO OVERLAY + TARGET GAME SELECTOR)
-        item(key = "visual_style_mini_floating_control") {
-            MiniFloatingVisualControlCard(
-                context = context,
-                isEnabled = miniFloatingEnabled,
-                onlyInSelectedGames = miniFloatingOnlyInGames,
-                canDrawOverlays = canDrawOverlays,
-                hasUsageAccess = displayTelemetry.hasUsageStatsPermission,
-                selectedGamesCount = selectedFloatingGames.size,
-                presetsCount = presets.size,
-                activePreset = activePreset,
-                primaryColor = primaryColor,
-                onToggleEnabled = { enabled ->
+                onToggleMiniFloating = { enabled ->
                     if (enabled && !Settings.canDrawOverlays(context)) {
                         try {
                             val intent = Intent(
@@ -331,7 +308,7 @@ fun VisualStyleScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 14.dp)
                     .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 VisualStyleSection.entries.forEach { sec ->
                     val selected = activeSection == sec
@@ -341,28 +318,31 @@ fun VisualStyleScreen(
                         label = {
                             Text(
                                 text = sec.title,
-                                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
-                                fontSize = 12.sp
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                fontSize = 11.sp,
+                                maxLines = 1
                             )
                         },
                         leadingIcon = {
                             Icon(
                                 imageVector = sec.icon,
                                 contentDescription = sec.title,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(14.dp)
                             )
                         },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = primaryColor.copy(alpha = 0.22f),
+                            selectedContainerColor = primaryColor.copy(alpha = 0.18f),
                             selectedLabelColor = primaryColor,
                             selectedLeadingIconColor = primaryColor
                         ),
                         border = FilterChipDefaults.filterChipBorder(
                             enabled = true,
                             selected = selected,
-                            borderColor = if (selected) primaryColor else MaterialTheme.colorScheme.outline
+                            borderColor = if (selected) primaryColor else MaterialTheme.colorScheme.outlineVariant
                         ),
-                        modifier = Modifier.testTag("section_tab_${sec.name.lowercase(Locale.US)}")
+                        modifier = Modifier
+                            .height(34.dp)
+                            .testTag("section_tab_${sec.name.lowercase(Locale.US)}")
                     )
                 }
             }
@@ -494,42 +474,44 @@ fun VisualStyleScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 14.dp),
-                            shape = RoundedCornerShape(16.dp),
+                            shape = RoundedCornerShape(14.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(20.dp),
+                                    .padding(14.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.SportsEsports,
                                     contentDescription = "No Game Profiles",
                                     tint = primaryColor,
-                                    modifier = Modifier.size(36.dp)
+                                    modifier = Modifier.size(28.dp)
                                 )
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = "No Per-Game Visual Profiles Configured",
+                                    text = "No Per-Game Visual Profiles",
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp
+                                    fontSize = 13.5.sp
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "Assign Competitive Mode, AMOLED Boost, or any custom visual profile to specific installed games.",
-                                    fontSize = 12.sp,
+                                    text = "Assign custom presets, refresh rate & brightness rules per game.",
+                                    fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                Spacer(modifier = Modifier.height(12.dp))
+                                Spacer(modifier = Modifier.height(10.dp))
                                 Button(
                                     onClick = { showAddGameProfileDialog = true },
-                                    modifier = Modifier.testTag("empty_add_game_profile_button")
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                                    modifier = Modifier
+                                        .height(34.dp)
+                                        .testTag("empty_add_game_profile_button")
                                 ) {
-                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Create Per-Game Profile")
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Text("Create Per-Game Profile", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -644,10 +626,16 @@ fun VisualStyleScreen(
 
 @Composable
 private fun VisualStyleDashboardCard(
+    context: Context,
     activePreset: VisualPreset?,
     adjustments: VisualAdjustments,
     displayTelemetry: SystemDisplayTelemetry,
     miniFloatingEnabled: Boolean,
+    onlyInSelectedGames: Boolean,
+    canDrawOverlays: Boolean,
+    hasUsageAccess: Boolean,
+    selectedGamesCount: Int,
+    presetsCount: Int,
     primaryColor: Color,
     secondaryColor: Color,
     headerGlow: Float,
@@ -655,15 +643,19 @@ private fun VisualStyleDashboardCard(
     onResetClick: () -> Unit,
     onCreatePresetClick: () -> Unit,
     onManageGameProfilesClick: () -> Unit,
-    onToggleMiniFloatingClick: () -> Unit
+    onToggleMiniFloating: (Boolean) -> Unit,
+    onToggleOnlyInSelectedGames: (Boolean) -> Unit,
+    onSelectTargetGamesClick: () -> Unit
 ) {
+    var showFloatingOptions by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 6.dp),
-        shape = RoundedCornerShape(20.dp),
+            .padding(horizontal = 14.dp, vertical = 2.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, primaryColor.copy(alpha = 0.45f))
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column(
             modifier = Modifier
@@ -671,14 +663,16 @@ private fun VisualStyleDashboardCard(
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            primaryColor.copy(alpha = (headerGlow * 0.45f).coerceIn(0.08f, 0.28f)),
-                            secondaryColor.copy(alpha = 0.05f),
+                            primaryColor.copy(alpha = (headerGlow * 0.35f).coerceIn(0.05f, 0.18f)),
+                            secondaryColor.copy(alpha = 0.03f),
                             Color.Transparent
                         )
                     )
                 )
-                .padding(16.dp)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Top Title + Active Preset Pill
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -686,113 +680,86 @@ private fun VisualStyleDashboardCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "DRAGON VISUAL ENGINE // OPENGL ES 2.0",
-                        fontSize = 10.sp,
+                        text = "VISUAL ENGINE • OPENGL ES 2.0",
+                        fontSize = 9.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = NeonCyan,
-                        letterSpacing = 1.1.sp
+                        color = primaryColor,
+                        letterSpacing = 0.8.sp
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Gaming Visual Style",
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Black,
+                        text = "Visual Style",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.ExtraBold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = primaryColor.copy(alpha = 0.16f),
-                    border = BorderStroke(1.dp, primaryColor.copy(alpha = 0.55f))
+                    shape = RoundedCornerShape(10.dp),
+                    color = primaryColor.copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, primaryColor.copy(alpha = 0.42f))
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
                             imageVector = Icons.Default.AutoAwesome,
                             contentDescription = "Active Preset",
                             tint = primaryColor,
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(13.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         Text(
-                            text = activePreset?.name ?: "Custom Profile",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = primaryColor
+                            text = activePreset?.name ?: "Custom",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = primaryColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Real Display Telemetry Strip (Resolution, Refresh Rate, Color Mode)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                DisplayMetricPill(
-                    modifier = Modifier.weight(1f),
-                    label = "RESOLUTION",
-                    value = "${displayTelemetry.widthPx}×${displayTelemetry.heightPx}",
-                    subValue = "${displayTelemetry.densityDpi} DPI",
-                    accentColor = NeonCyan
-                )
-                DisplayMetricPill(
-                    modifier = Modifier.weight(1f),
-                    label = "REFRESH RATE",
-                    value = displayTelemetry.refreshRateLabel,
-                    subValue = "${displayTelemetry.supportedModes.size} Mode(s)",
-                    accentColor = SuccessGreen
-                )
-                DisplayMetricPill(
-                    modifier = Modifier.weight(1f),
-                    label = "COLOR MODE",
-                    value = when (displayTelemetry.currentWindowColorMode) {
-                        TargetWindowColorMode.WIDE_COLOR_GAMUT -> "DCI-P3 Wide"
-                        TargetWindowColorMode.HDR -> "HDR Mode"
-                        TargetWindowColorMode.DEFAULT -> "sRGB Std"
-                    },
-                    subValue = if (displayTelemetry.isWideColorGamutSupported) "Wide-Gamut HW" else "Standard Panel",
-                    accentColor = AmberGold
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Current Visual Configuration Summary Matrix
+            // Unified Display Telemetry & Shader Summary Bar
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f))
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
             ) {
-                Column(modifier = Modifier.padding(10.dp)) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val colorLabel = when (displayTelemetry.currentWindowColorMode) {
+                            TargetWindowColorMode.WIDE_COLOR_GAMUT -> "DCI-P3"
+                            TargetWindowColorMode.HDR -> "HDR"
+                            TargetWindowColorMode.DEFAULT -> "sRGB"
+                        }
                         Text(
-                            text = "CURRENT VISUAL CONFIGURATION",
-                            fontSize = 9.5.sp,
+                            text = "${displayTelemetry.widthPx}×${displayTelemetry.heightPx} • ${displayTelemetry.refreshRateLabel} • $colorLabel",
+                            fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
                             text = "LUT: ${adjustments.lutProfile.label}",
                             fontSize = 9.5.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
-                            color = NeonCyan
+                            color = secondaryColor
                         )
                     }
-                    Spacer(modifier = Modifier.height(6.dp))
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -801,437 +768,279 @@ private fun VisualStyleDashboardCard(
                         ConfigMiniStat("CONT", "${adjustments.contrastPercent.roundToInt()}%")
                         ConfigMiniStat("BRT", "${adjustments.brightnessPercent.roundToInt()}%")
                         ConfigMiniStat("TEMP", "${adjustments.colorTempKelvin.roundToInt()}K")
-                        ConfigMiniStat("SHARP", "${adjustments.sharpness.roundToInt()}")
-                        ConfigMiniStat("GAMMA", String.format(Locale.US, "%.2f", adjustments.gamma))
+                        ConfigMiniStat("SHP", "${adjustments.sharpness.roundToInt()}")
+                        ConfigMiniStat("GAM", String.format(Locale.US, "%.2f", adjustments.gamma))
                     }
                 }
             }
 
             // HDR Disclaimer if HDR Inspired preset or HDR LUT is active
             if (activePreset?.showHdrDisclaimer == true || adjustments.lutProfile == LutGradingProfile.HDR_INSPIRED_TONEMAP) {
-                Spacer(modifier = Modifier.height(10.dp))
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp),
-                    color = WarningOrange.copy(alpha = 0.14f),
-                    border = BorderStroke(1.dp, WarningOrange.copy(alpha = 0.5f))
+                    shape = RoundedCornerShape(8.dp),
+                    color = WarningOrange.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, WarningOrange.copy(alpha = 0.4f))
                 ) {
                     Row(
-                        modifier = Modifier.padding(10.dp),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
                             imageVector = Icons.Default.Info,
                             contentDescription = "HDR Notice",
                             tint = WarningOrange,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(14.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "HDR-Inspired Notice: Software tone-mapping enhances perceived contrast and highlight roll-off, but does not enable hardware HDR or create true HDR output on unsupported displays.",
-                            fontSize = 11.sp,
+                            text = "Software HDR tone-mapping active (emulated contrast/highlight curve).",
+                            fontSize = 10.sp,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Primary Action Buttons: Apply, Reset, Save Preset, Game Profiles
+            // Compact Action Strip: Apply | Reset | + Preset | Games
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(
                     onClick = onApplyClick,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
-                        .weight(1f)
+                        .weight(1.1f)
+                        .height(34.dp)
                         .testTag("visual_style_apply_button"),
                     colors = ButtonDefaults.buttonColors(containerColor = primaryColor)
                 ) {
-                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Apply Style", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Apply", fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
                 }
 
                 OutlinedButton(
                     onClick = onResetClick,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
-                        .weight(1f)
+                        .weight(0.8f)
+                        .height(34.dp)
                         .testTag("visual_style_reset_button"),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Reset", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Reset", fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
                 }
-            }
 
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
                 FilledTonalButton(
                     onClick = onCreatePresetClick,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
-                        .weight(1f)
+                        .weight(0.9f)
+                        .height(34.dp)
                         .testTag("dashboard_create_preset_button")
                 ) {
-                    Icon(Icons.Default.AddCircleOutline, contentDescription = null, modifier = Modifier.size(15.dp))
-                    Spacer(modifier = Modifier.width(5.dp))
-                    Text("New Custom Preset", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("Preset", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 }
 
                 FilledTonalButton(
                     onClick = onManageGameProfilesClick,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
-                        .weight(1f)
+                        .weight(0.95f)
+                        .height(34.dp)
                         .testTag("dashboard_game_profiles_button")
                 ) {
-                    Icon(Icons.Default.SportsEsports, contentDescription = null, modifier = Modifier.size(15.dp))
-                    Spacer(modifier = Modifier.width(5.dp))
-                    Text("Per-Game Profiles", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Icon(Icons.Default.SportsEsports, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("Games", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Quick Mini Floating Visual Control Button inside Main Dashboard
-            Button(
-                onClick = onToggleMiniFloatingClick,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("dashboard_mini_floating_button"),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (miniFloatingEnabled) SuccessGreen.copy(alpha = 0.22f) else ElectricViolet.copy(alpha = 0.20f),
-                    contentColor = if (miniFloatingEnabled) SuccessGreen else NeonCyan
-                ),
-                border = BorderStroke(
-                    1.dp,
-                    if (miniFloatingEnabled) SuccessGreen.copy(alpha = 0.7f) else NeonCyan.copy(alpha = 0.55f)
-                )
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(22.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .border(1.dp, NeonCyan, RoundedCornerShape(6.dp))
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_launcher_background),
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                        contentDescription = "Dragon Tool Logo",
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = if (miniFloatingEnabled) {
-                        "Mini Floating Visual Control: ACTIVE (Tap to Disable)"
-                    } else {
-                        "Enable Mini Floating Visual Control"
-                    },
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 12.sp
-                )
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = displayTelemetry.lastDisplayOperationStatus,
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                color = SuccessGreen
-            )
-        }
-    }
-}
-
-@Composable
-private fun MiniFloatingVisualControlCard(
-    context: Context,
-    isEnabled: Boolean,
-    onlyInSelectedGames: Boolean,
-    canDrawOverlays: Boolean,
-    hasUsageAccess: Boolean,
-    selectedGamesCount: Int,
-    presetsCount: Int,
-    activePreset: VisualPreset?,
-    primaryColor: Color,
-    onToggleEnabled: (Boolean) -> Unit,
-    onToggleOnlyInSelectedGames: (Boolean) -> Unit,
-    onSelectTargetGamesClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(
-            width = 1.2.dp,
-            color = if (isEnabled) SuccessGreen.copy(alpha = 0.65f) else primaryColor.copy(alpha = 0.45f)
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    // Exact Dragon Tool App Logo Floating Icon Preview
-                    Box(
-                        modifier = Modifier
-                            .size(46.dp)
-                            .clip(RoundedCornerShape(13.dp))
-                            .background(Color(0xFF12131A))
-                            .border(
-                                width = 1.8.dp,
-                                color = if (isEnabled) SuccessGreen else NeonCyan,
-                                shape = RoundedCornerShape(13.dp)
-                            )
-                            .padding(3.dp)
-                    ) {
-                        Image(
-                            painter = painterResource(id = R.drawable.ic_launcher_background),
-                            contentDescription = null,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(10.dp))
-                        )
-                        Image(
-                            painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                            contentDescription = "Dragon Floating Logo",
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(10.dp))
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .align(Alignment.BottomEnd)
-                                .clip(CircleShape)
-                                .background(if (isEnabled) SuccessGreen else NeonCyan)
-                                .border(1.5.dp, Color(0xFF0B0F17), CircleShape)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "Mini Floating Visual Control",
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 15.sp,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (isEnabled) SuccessGreen.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant
-                            ) {
-                                Text(
-                                    text = if (isEnabled) "ONLINE" else "OFF",
-                                    fontSize = 9.5.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isEnabled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "Floating Dragon Tool logo auto-opens in selected games. Tap the icon to open the synced Visual Style popup list & switch styles live.",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Switch(
-                    checked = isEnabled,
-                    onCheckedChange = onToggleEnabled,
-                    modifier = Modifier.testTag("mini_floating_visual_control_switch")
-                )
-            }
-
-            // Synced status pill
+            // Compact Integrated Mini Floating Visual Control Row (Expandable)
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                shape = RoundedCornerShape(11.dp),
+                color = if (miniFloatingEnabled) SuccessGreen.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f),
+                border = BorderStroke(
+                    1.dp,
+                    if (miniFloatingEnabled) SuccessGreen.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                )
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "SYNCED STYLES: $presetsCount PRESETS",
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = NeonCyan
-                    )
-                    Text(
-                        text = "ACTIVE: ${(activePreset?.name ?: "Custom").uppercase(Locale.US)}",
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = SuccessGreen
-                    )
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { showFloatingOptions = !showFloatingOptions }
+                                .testTag("dashboard_mini_floating_button")
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .border(1.dp, if (miniFloatingEnabled) SuccessGreen else primaryColor, RoundedCornerShape(8.dp))
+                            ) {
+                                Image(
+                                    painter = painterResource(id = R.drawable.ic_launcher_background),
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                Image(
+                                    painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                                    contentDescription = "Dragon Floating Logo",
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "Floating Overlay",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (miniFloatingEnabled) "ON • $presetsCount styles" else "$selectedGamesCount games",
+                                        fontSize = 9.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (miniFloatingEnabled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Text(
+                                    text = "Tap to configure target games & overlay rules",
+                                    fontSize = 9.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Icon(
+                                imageVector = if (showFloatingOptions) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = "Toggle Floating Options",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Switch(
+                            checked = miniFloatingEnabled,
+                            onCheckedChange = onToggleMiniFloating,
+                            modifier = Modifier.testTag("mini_floating_visual_control_switch")
+                        )
+                    }
+
+                    AnimatedVisibility(visible = showFloatingOptions) {
+                        Column(
+                            modifier = Modifier.padding(top = 6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Auto-open only inside selected games",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Switch(
+                                    checked = onlyInSelectedGames,
+                                    onCheckedChange = onToggleOnlyInSelectedGames,
+                                    modifier = Modifier.testTag("mini_floating_only_in_games_switch")
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = onSelectTargetGamesClick,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(32.dp)
+                                        .testTag("select_floating_target_games_button")
+                                ) {
+                                    Icon(Icons.Default.SportsEsports, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Games ($selectedGamesCount)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                if (!canDrawOverlays) {
+                                    Button(
+                                        onClick = {
+                                            try {
+                                                val intent = Intent(
+                                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                    Uri.parse("package:${context.packageName}")
+                                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                context.startActivity(intent)
+                                            } catch (_: Exception) {}
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(32.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = WarningOrange)
+                                    ) {
+                                        Text("Grant Overlay", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                } else if (!hasUsageAccess) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            try {
+                                                val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                context.startActivity(intent)
+                                            } catch (_: Exception) {}
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(32.dp),
+                                        border = BorderStroke(1.dp, AmberGold)
+                                    ) {
+                                        Text("Usage Access", fontSize = 11.sp, color = AmberGold, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
-            // Auto-Open Mode Option (Show Now & In Selected Games vs Auto-Open ONLY in Selected Games)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Auto-Open Only Inside Selected Games",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = if (onlyInSelectedGames) {
-                            "Floating Dragon icon stays hidden outside games and auto-opens when a selected game launches"
-                        } else {
-                            "Floating Dragon icon is visible now on screen AND auto-opens in selected games"
-                        },
-                        fontSize = 10.5.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = onlyInSelectedGames,
-                    onCheckedChange = onToggleOnlyInSelectedGames,
-                    modifier = Modifier.testTag("mini_floating_only_in_games_switch")
+            if (displayTelemetry.lastDisplayOperationStatus.isNotBlank()) {
+                Text(
+                    text = displayTelemetry.lastDisplayOperationStatus,
+                    fontSize = 9.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = SuccessGreen,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-
-            // Target Games Selection & Permissions Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = onSelectTargetGamesClick,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("select_floating_target_games_button"),
-                    border = BorderStroke(1.dp, primaryColor.copy(alpha = 0.65f))
-                ) {
-                    Icon(Icons.Default.SportsEsports, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Selected Games ($selectedGamesCount)",
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                if (!canDrawOverlays) {
-                    Button(
-                        onClick = {
-                            try {
-                                val intent = Intent(
-                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:${context.packageName}")
-                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                context.startActivity(intent)
-                            } catch (_: Exception) {}
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = WarningOrange)
-                    ) {
-                        Icon(Icons.Default.Layers, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(5.dp))
-                        Text("Grant Overlay", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
-                    }
-                } else if (!hasUsageAccess) {
-                    OutlinedButton(
-                        onClick = {
-                            try {
-                                val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                context.startActivity(intent)
-                            } catch (_: Exception) {}
-                        },
-                        modifier = Modifier.weight(1f),
-                        border = BorderStroke(1.dp, AmberGold)
-                    ) {
-                        Icon(Icons.Default.Security, contentDescription = null, tint = AmberGold, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(5.dp))
-                        Text("Usage Access", fontSize = 11.5.sp, color = AmberGold, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DisplayMetricPill(
-    modifier: Modifier = Modifier,
-    label: String,
-    value: String,
-    subValue: String,
-    accentColor: Color
-) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.35f))
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp)) {
-            Text(
-                text = label,
-                fontSize = 8.5.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                color = accentColor
-            )
-            Text(
-                text = value,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = subValue,
-                fontSize = 9.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
         }
     }
 }
@@ -1277,240 +1086,233 @@ private fun BeforeAfterGlPreviewCard(
     onPickCustomImage: () -> Unit,
     onToggleExpensiveEffects: (Boolean) -> Unit
 ) {
+    var previewExpanded by remember { mutableStateOf(true) }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "BEFORE & AFTER // LIVE GPU SHADER PREVIEW",
-                        fontSize = 9.5.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = NeonCyan
-                    )
-                    Text(
-                        text = activeScene.title,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-
-                // Frame render time badge
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = SuccessGreen.copy(alpha = 0.14f),
-                    border = BorderStroke(1.dp, SuccessGreen.copy(alpha = 0.45f))
-                ) {
-                    Text(
-                        text = String.format(Locale.US, "GPU %.2f ms", perfStats.avgFrameRenderTimeMs),
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = SuccessGreen,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // OpenGL ES 2.0 Surface Container
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(210.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .border(1.dp, primaryColor.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
-            ) {
-                AndroidView(
-                    factory = { ctx ->
-                        GLSurfaceView(ctx).apply {
-                            setEGLContextClientVersion(2)
-                            setRenderer(glRenderer)
-                            renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
-                            onGlSurfaceViewReady(this)
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .testTag("visual_style_gl_surface")
-                )
-
-                // Overlay Labels explicitly stating PREVIEW (Original vs Modified)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    if (comparisonEnabled || holdOriginal) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = Color.Black.copy(alpha = 0.68f)
-                        ) {
-                            Text(
-                                text = "ORIGINAL (BEFORE)",
-                                fontSize = 9.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                            )
-                        }
-                    } else {
-                        Spacer(modifier = Modifier.width(1.dp))
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = Color.Black.copy(alpha = 0.68f)
-                    ) {
-                        Text(
-                            text = if (holdOriginal) "RESTORED ORIGINAL PREVIEW" else "MODIFIED (SHADER PREVIEW)",
-                            fontSize = 9.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            color = NeonCyan,
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Interactive Split Comparison Slider
-            if (comparisonEnabled && !holdOriginal) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Split Wipe ${(splitRatio * 100).roundToInt()}%",
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = NeonCyan,
-                        modifier = Modifier.width(105.dp)
-                    )
-                    Slider(
-                        value = splitRatio,
-                        onValueChange = onSplitRatioChange,
-                        valueRange = 0.05f..0.95f,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("comparison_split_slider")
-                    )
-                }
-            }
-
-            // Comparison & Original Restore Controls + Custom Image Picker
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = comparisonEnabled,
-                    onClick = onToggleComparison,
-                    label = { Text("Before/After Split", fontSize = 11.sp) },
-                    leadingIcon = {
-                        Icon(Icons.Default.Compare, contentDescription = null, modifier = Modifier.size(15.dp))
-                    },
-                    modifier = Modifier.testTag("toggle_comparison_chip")
-                )
-
-                FilterChip(
-                    selected = holdOriginal,
-                    onClick = onToggleHoldOriginal,
-                    label = { Text(if (holdOriginal) "Showing Original" else "Restore Original", fontSize = 11.sp) },
-                    leadingIcon = {
-                        Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(15.dp))
-                    },
-                    modifier = Modifier.testTag("restore_original_preview_chip")
-                )
-
-                AssistChip(
-                    onClick = onPickCustomImage,
-                    label = { Text("Load Photo", fontSize = 11.sp) },
-                    leadingIcon = {
-                        Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(15.dp))
-                    },
-                    modifier = Modifier.testTag("pick_custom_preview_image_button")
-                )
-            }
-
-            // Scene Selector Pills
+        Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                GamingPreviewScene.entries.filter { it != GamingPreviewScene.CUSTOM_IMAGE }.forEach { scene ->
-                    val selected = activeScene == scene
-                    AssistChip(
-                        onClick = { onSelectScene(scene) },
-                        label = {
-                            Text(
-                                text = scene.title,
-                                fontSize = 10.5.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                color = if (selected) primaryColor else MaterialTheme.colorScheme.onSurface
-                            )
-                        },
-                        border = BorderStroke(
-                            1.dp,
-                            if (selected) primaryColor else MaterialTheme.colorScheme.outline
-                        )
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Performance Management Toggle & Honest Scope Notice
-            Row(
-                modifier = Modifier.fillMaxWidth(),
+                    .clickable { previewExpanded = !previewExpanded },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Multi-Tap GPU Sharpening & Analytic LUT Pass",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        text = "LIVE SHADER PREVIEW",
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = primaryColor
                     )
                     Text(
-                        text = "${perfStats.gpuRendererName} • Disable to reduce GPU preview load",
-                        fontSize = 9.5.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = activeScene.title,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
-                Switch(
-                    checked = expensiveEffectsEnabled,
-                    onCheckedChange = onToggleExpensiveEffects,
-                    modifier = Modifier.testTag("toggle_expensive_effects_switch")
-                )
+
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(7.dp),
+                        color = SuccessGreen.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, SuccessGreen.copy(alpha = 0.4f))
+                    ) {
+                        Text(
+                            text = String.format(Locale.US, "%.2f ms", perfStats.avgFrameRenderTimeMs),
+                            fontSize = 9.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = SuccessGreen,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                        )
+                    }
+                    Icon(
+                        imageVector = if (previewExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = "Toggle Shader Preview",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Preview Notice: The image preview above renders on Dragon Tool's OpenGL ES 2.0 surface to demonstrate your visual adjustments and does not represent live capture from third-party games.",
-                fontSize = 9.5.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            AnimatedVisibility(visible = previewExpanded) {
+                Column {
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Compact OpenGL ES 2.0 Surface Container
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(152.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, primaryColor.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                    ) {
+                        AndroidView(
+                            factory = { ctx ->
+                                GLSurfaceView(ctx).apply {
+                                    setEGLContextClientVersion(2)
+                                    setRenderer(glRenderer)
+                                    renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
+                                    onGlSurfaceViewReady(this)
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("visual_style_gl_surface")
+                        )
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            if (comparisonEnabled || holdOriginal) {
+                                Surface(
+                                    shape = RoundedCornerShape(5.dp),
+                                    color = Color.Black.copy(alpha = 0.65f)
+                                ) {
+                                    Text(
+                                        text = "BEFORE",
+                                        fontSize = 8.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            } else {
+                                Spacer(modifier = Modifier.width(1.dp))
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(5.dp),
+                                color = Color.Black.copy(alpha = 0.65f)
+                            ) {
+                                Text(
+                                    text = if (holdOriginal) "ORIGINAL" else "AFTER",
+                                    fontSize = 8.5.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = primaryColor,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (comparisonEnabled && !holdOriginal) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Split ${(splitRatio * 100).roundToInt()}%",
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = primaryColor,
+                                modifier = Modifier.width(68.dp)
+                            )
+                            Slider(
+                                value = splitRatio,
+                                onValueChange = onSplitRatioChange,
+                                valueRange = 0.05f..0.95f,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(28.dp)
+                                    .testTag("comparison_split_slider")
+                            )
+                        }
+                    }
+
+                    // Compact Controls Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterChip(
+                            selected = comparisonEnabled,
+                            onClick = onToggleComparison,
+                            label = { Text("Split", fontSize = 10.5.sp) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Compare, contentDescription = null, modifier = Modifier.size(14.dp))
+                            },
+                            modifier = Modifier.testTag("toggle_comparison_chip")
+                        )
+
+                        FilterChip(
+                            selected = holdOriginal,
+                            onClick = onToggleHoldOriginal,
+                            label = { Text(if (holdOriginal) "Original" else "Compare", fontSize = 10.5.sp) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(14.dp))
+                            },
+                            modifier = Modifier.testTag("restore_original_preview_chip")
+                        )
+
+                        AssistChip(
+                            onClick = onPickCustomImage,
+                            label = { Text("Photo", fontSize = 10.5.sp) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(14.dp))
+                            },
+                            modifier = Modifier.testTag("pick_custom_preview_image_button")
+                        )
+
+                        GamingPreviewScene.entries.filter { it != GamingPreviewScene.CUSTOM_IMAGE }.forEach { scene ->
+                            val selected = activeScene == scene
+                            AssistChip(
+                                onClick = { onSelectScene(scene) },
+                                label = {
+                                    Text(
+                                        text = scene.title,
+                                        fontSize = 10.sp,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (selected) primaryColor else MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) primaryColor else MaterialTheme.colorScheme.outlineVariant
+                                )
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Multi-Tap GPU Sharpening & LUT Pass",
+                            fontSize = 10.5.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Switch(
+                            checked = expensiveEffectsEnabled,
+                            onCheckedChange = onToggleExpensiveEffects,
+                            modifier = Modifier.testTag("toggle_expensive_effects_switch")
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -1531,17 +1333,18 @@ private fun PresetLibraryToolbar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp)
+            .padding(horizontal = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             listOf(
-                "ALL" to "All Presets",
+                "ALL" to "All",
                 "BUILT_IN" to "Built-In (8)",
                 "CUSTOM" to "Custom",
                 "FAVORITES" to "Favorites"
@@ -1550,51 +1353,58 @@ private fun PresetLibraryToolbar(
                 FilterChip(
                     selected = isSel,
                     onClick = { onFilterChange(key) },
-                    label = { Text(label, fontSize = 11.sp) },
+                    label = { Text(label, fontSize = 10.5.sp, maxLines = 1) },
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = primaryColor.copy(alpha = 0.2f),
+                        selectedContainerColor = primaryColor.copy(alpha = 0.18f),
                         selectedLabelColor = primaryColor
-                    )
+                    ),
+                    modifier = Modifier.height(30.dp)
                 )
             }
         }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             OutlinedButton(
                 onClick = onCreateCustomClick,
                 modifier = Modifier
                     .weight(1f)
+                    .height(32.dp)
                     .testTag("library_create_preset_button"),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                shape = RoundedCornerShape(9.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Create", fontSize = 11.sp)
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(3.dp))
+                Text("Create", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
             }
             OutlinedButton(
                 onClick = onImportClick,
                 modifier = Modifier
                     .weight(1f)
+                    .height(32.dp)
                     .testTag("library_import_preset_button"),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                shape = RoundedCornerShape(9.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
             ) {
-                Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(15.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Import JSON", fontSize = 11.sp)
+                Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(3.dp))
+                Text("Import", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
             }
             OutlinedButton(
                 onClick = onExportAllClick,
                 modifier = Modifier
                     .weight(1f)
+                    .height(32.dp)
                     .testTag("library_export_preset_button"),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                shape = RoundedCornerShape(9.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
             ) {
-                Icon(Icons.Default.IosShare, contentDescription = null, modifier = Modifier.size(15.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Export JSON", fontSize = 11.sp)
+                Icon(Icons.Default.IosShare, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(3.dp))
+                Text("Export", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -1626,7 +1436,7 @@ private fun VisualPresetCard(
             .padding(horizontal = 14.dp)
             .clickable { onSelectAndApply() }
             .testTag("preset_card_${preset.id}"),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
                 cardAccent.copy(alpha = 0.10f)
@@ -1635,11 +1445,11 @@ private fun VisualPresetCard(
             }
         ),
         border = BorderStroke(
-            width = if (isSelected) 1.8.dp else 1.dp,
-            color = if (isSelected) cardAccent else MaterialTheme.colorScheme.outline
+            width = if (isSelected) 1.5.dp else 1.dp,
+            color = if (isSelected) cardAccent else MaterialTheme.colorScheme.outlineVariant
         )
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1649,93 +1459,63 @@ private fun VisualPresetCard(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
                 ) {
-                    // Mini visual color-grading swatch preview
                     PresetMiniPreviewSwatch(
                         adjustments = preset.adjustments,
                         accentColor = cardAccent
                     )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = preset.name,
-                                fontSize = 16.sp,
+                                fontSize = 14.5.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             if (isSelected) {
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = cardAccent.copy(alpha = 0.22f)
+                                    shape = RoundedCornerShape(5.dp),
+                                    color = cardAccent.copy(alpha = 0.2f)
                                 ) {
                                     Text(
                                         text = "ACTIVE",
-                                        fontSize = 9.sp,
+                                        fontSize = 8.5.sp,
                                         fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Black,
+                                        fontWeight = FontWeight.Bold,
                                         color = cardAccent,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                     )
                                 }
                             }
                         }
                         Text(
-                            text = preset.tagline,
-                            fontSize = 9.5.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            color = cardAccent
+                            text = "${preset.tagline} • ${preset.highlights.take(2).joinToString(" • ")}",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
 
                 IconButton(
                     onClick = onToggleFavorite,
-                    modifier = Modifier.testTag("favorite_btn_${preset.id}")
+                    modifier = Modifier
+                        .size(32.dp)
+                        .testTag("favorite_btn_${preset.id}")
                 ) {
                     Icon(
                         imageVector = if (preset.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
                         contentDescription = "Favorite Preset",
-                        tint = if (preset.isFavorite) AmberGold else MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = if (preset.isFavorite) AmberGold else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = preset.description,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Bullet highlights of the preset's parameters
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                preset.highlights.forEach { bullet ->
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
-                    ) {
-                        Text(
-                            text = bullet,
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Preset Actions Row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1747,47 +1527,48 @@ private fun VisualPresetCard(
                         containerColor = if (isSelected) SuccessGreen else cardAccent,
                         contentColor = Color.Black
                     ),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                    modifier = Modifier.height(34.dp)
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    modifier = Modifier.height(30.dp),
+                    shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
-                        text = if (isSelected) "Applied" else "Apply Preset",
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        text = if (isSelected) "Applied" else "Apply",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    IconButton(onClick = onDuplicate, modifier = Modifier.size(34.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    IconButton(onClick = onDuplicate, modifier = Modifier.size(30.dp)) {
                         Icon(
                             imageVector = Icons.Default.ContentCopy,
                             contentDescription = "Duplicate Preset",
-                            modifier = Modifier.size(17.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                     }
-                    IconButton(onClick = onExportJson, modifier = Modifier.size(34.dp)) {
+                    IconButton(onClick = onExportJson, modifier = Modifier.size(30.dp)) {
                         Icon(
                             imageVector = Icons.Default.Share,
                             contentDescription = "Export Preset JSON",
-                            modifier = Modifier.size(17.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                     if (onRename != null) {
-                        IconButton(onClick = onRename, modifier = Modifier.size(34.dp)) {
+                        IconButton(onClick = onRename, modifier = Modifier.size(30.dp)) {
                             Icon(
                                 imageVector = Icons.Default.Edit,
                                 contentDescription = "Rename Preset",
-                                modifier = Modifier.size(17.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
                     if (onDelete != null) {
-                        IconButton(onClick = onDelete, modifier = Modifier.size(34.dp)) {
+                        IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
                             Icon(
                                 imageVector = Icons.Default.DeleteOutline,
                                 contentDescription = "Delete Preset",
                                 tint = DangerRed,
-                                modifier = Modifier.size(17.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
@@ -1808,9 +1589,9 @@ private fun PresetMiniPreviewSwatch(
     }
     Canvas(
         modifier = Modifier
-            .size(46.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, accentColor.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+            .size(38.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .border(1.dp, accentColor.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
     ) {
         val r = (0.18f * tempRgb[0] * (adjustments.redChannelPercent / 100f)).coerceIn(0f, 1f)
         val g = (0.55f * tempRgb[1] * (adjustments.greenChannelPercent / 100f)).coerceIn(0f, 1f)
@@ -1849,43 +1630,45 @@ private fun CustomAdjustmentsPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "CUSTOM VISUAL ADJUSTMENTS // LIVE SHADER SLIDERS",
-                        fontSize = 9.5.sp,
+                        text = "LIVE SHADER TUNING",
+                        fontSize = 9.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = NeonCyan
+                        color = primaryColor
                     )
                     Text(
-                        text = "Precision Color & Gamma Tuning",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        text = "Color, Contrast & Gamma",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
                 TextButton(
                     onClick = onResetAllToNeutral,
-                    modifier = Modifier.testTag("reset_all_sliders_button")
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier
+                        .height(30.dp)
+                        .testTag("reset_all_sliders_button")
                 ) {
-                    Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Reset All", fontSize = 12.sp)
+                    Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("Reset", fontSize = 11.sp)
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
-            // 1. Saturation: 0-200%
             AdjustmentSliderRow(
                 label = "Saturation",
                 valueText = "${adjustments.saturationPercent.roundToInt()}%",
@@ -1896,8 +1679,6 @@ private fun CustomAdjustmentsPanel(
                 testTag = "slider_saturation",
                 onValueChange = { onUpdateAdjustments(adjustments.copy(saturationPercent = it)) }
             )
-
-            // 2. Contrast: 50-150%
             AdjustmentSliderRow(
                 label = "Contrast",
                 valueText = "${adjustments.contrastPercent.roundToInt()}%",
@@ -1908,8 +1689,6 @@ private fun CustomAdjustmentsPanel(
                 testTag = "slider_contrast",
                 onValueChange = { onUpdateAdjustments(adjustments.copy(contrastPercent = it)) }
             )
-
-            // 3. Brightness: 50-150%
             AdjustmentSliderRow(
                 label = "Brightness",
                 valueText = "${adjustments.brightnessPercent.roundToInt()}%",
@@ -1920,10 +1699,8 @@ private fun CustomAdjustmentsPanel(
                 testTag = "slider_brightness",
                 onValueChange = { onUpdateAdjustments(adjustments.copy(brightnessPercent = it)) }
             )
-
-            // 4. Color Temperature: 3000K-9000K
             AdjustmentSliderRow(
-                label = "Color Temperature",
+                label = "Color Temp",
                 valueText = "${adjustments.colorTempKelvin.roundToInt()}K",
                 value = adjustments.colorTempKelvin,
                 valueRange = 3000f..9000f,
@@ -1932,10 +1709,8 @@ private fun CustomAdjustmentsPanel(
                 testTag = "slider_color_temp",
                 onValueChange = { onUpdateAdjustments(adjustments.copy(colorTempKelvin = it)) }
             )
-
-            // 5. Sharpness: 0-100
             AdjustmentSliderRow(
-                label = "Sharpness (GPU 5-Tap)",
+                label = "Sharpness (5-Tap)",
                 valueText = "${adjustments.sharpness.roundToInt()}",
                 value = adjustments.sharpness,
                 valueRange = 0f..100f,
@@ -1944,8 +1719,6 @@ private fun CustomAdjustmentsPanel(
                 testTag = "slider_sharpness",
                 onValueChange = { onUpdateAdjustments(adjustments.copy(sharpness = it)) }
             )
-
-            // 6. Gamma: 0.5-2.5
             AdjustmentSliderRow(
                 label = "Gamma",
                 valueText = String.format(Locale.US, "%.2f", adjustments.gamma),
@@ -1957,19 +1730,18 @@ private fun CustomAdjustmentsPanel(
                 onValueChange = { onUpdateAdjustments(adjustments.copy(gamma = it)) }
             )
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
             Text(
-                text = "RGB CHANNEL BALANCE (0–200%)",
-                fontSize = 10.sp,
+                text = "RGB GAIN BALANCE (0–200%)",
+                fontSize = 9.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // 7. Red Channel
             AdjustmentSliderRow(
-                label = "Red Channel",
+                label = "Red",
                 valueText = "${adjustments.redChannelPercent.roundToInt()}%",
                 value = adjustments.redChannelPercent,
                 valueRange = 0f..200f,
@@ -1978,10 +1750,8 @@ private fun CustomAdjustmentsPanel(
                 testTag = "slider_red_channel",
                 onValueChange = { onUpdateAdjustments(adjustments.copy(redChannelPercent = it)) }
             )
-
-            // 8. Green Channel
             AdjustmentSliderRow(
-                label = "Green Channel",
+                label = "Green",
                 valueText = "${adjustments.greenChannelPercent.roundToInt()}%",
                 value = adjustments.greenChannelPercent,
                 valueRange = 0f..200f,
@@ -1990,10 +1760,8 @@ private fun CustomAdjustmentsPanel(
                 testTag = "slider_green_channel",
                 onValueChange = { onUpdateAdjustments(adjustments.copy(greenChannelPercent = it)) }
             )
-
-            // 9. Blue Channel
             AdjustmentSliderRow(
-                label = "Blue Channel",
+                label = "Blue",
                 valueText = "${adjustments.blueChannelPercent.roundToInt()}%",
                 value = adjustments.blueChannelPercent,
                 valueRange = 0f..200f,
@@ -2003,141 +1771,113 @@ private fun CustomAdjustmentsPanel(
                 onValueChange = { onUpdateAdjustments(adjustments.copy(blueChannelPercent = it)) }
             )
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-            // VISUAL FILTER ENGINE: LUT Grading + Grayscale / Sepia / Invert / Custom Matrix
             Text(
-                text = "VISUAL FILTER ENGINE // SHADER & LUT PIPELINE",
-                fontSize = 10.sp,
+                text = "SHADER & LUT FILTERS",
+                fontSize = 9.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
-                color = NeonCyan
+                color = primaryColor
             )
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(3.dp))
 
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 FilterChip(
                     selected = adjustments.enableGrayscale,
-                    onClick = {
-                        onUpdateAdjustments(adjustments.copy(enableGrayscale = !adjustments.enableGrayscale))
-                    },
-                    label = { Text("Grayscale", fontSize = 11.sp) },
-                    modifier = Modifier.testTag("filter_grayscale_chip")
+                    onClick = { onUpdateAdjustments(adjustments.copy(enableGrayscale = !adjustments.enableGrayscale)) },
+                    label = { Text("Grayscale", fontSize = 10.5.sp) },
+                    modifier = Modifier.height(30.dp).testTag("filter_grayscale_chip")
                 )
                 FilterChip(
                     selected = adjustments.enableSepia,
-                    onClick = {
-                        onUpdateAdjustments(adjustments.copy(enableSepia = !adjustments.enableSepia))
-                    },
-                    label = { Text("Sepia", fontSize = 11.sp) },
-                    modifier = Modifier.testTag("filter_sepia_chip")
+                    onClick = { onUpdateAdjustments(adjustments.copy(enableSepia = !adjustments.enableSepia)) },
+                    label = { Text("Sepia", fontSize = 10.5.sp) },
+                    modifier = Modifier.height(30.dp).testTag("filter_sepia_chip")
                 )
                 FilterChip(
                     selected = adjustments.enableInvert,
-                    onClick = {
-                        onUpdateAdjustments(adjustments.copy(enableInvert = !adjustments.enableInvert))
-                    },
-                    label = { Text("Invert Colors", fontSize = 11.sp) },
-                    modifier = Modifier.testTag("filter_invert_chip")
+                    onClick = { onUpdateAdjustments(adjustments.copy(enableInvert = !adjustments.enableInvert)) },
+                    label = { Text("Invert", fontSize = 10.5.sp) },
+                    modifier = Modifier.height(30.dp).testTag("filter_invert_chip")
                 )
                 FilterChip(
                     selected = adjustments.useCustomColorMatrix,
-                    onClick = {
-                        onUpdateAdjustments(adjustments.copy(useCustomColorMatrix = !adjustments.useCustomColorMatrix))
-                    },
-                    label = { Text("Custom 3×3 Matrix", fontSize = 11.sp) },
-                    modifier = Modifier.testTag("filter_custom_matrix_chip")
+                    onClick = { onUpdateAdjustments(adjustments.copy(useCustomColorMatrix = !adjustments.useCustomColorMatrix)) },
+                    label = { Text("3×3 Matrix", fontSize = 10.5.sp) },
+                    modifier = Modifier.height(30.dp).testTag("filter_custom_matrix_chip")
                 )
             }
 
-            // Custom 3x3 Color Matrix presets when active
             AnimatedVisibility(
                 visible = adjustments.useCustomColorMatrix,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
-                Column(modifier = Modifier.padding(top = 8.dp)) {
-                    Text(
-                        text = "3×3 Color Matrix Transform Presets:",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 5.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    AssistChip(
+                        onClick = {
+                            onUpdateAdjustments(adjustments.copy(customMatrixValues = listOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)))
+                        },
+                        label = { Text("Identity", fontSize = 10.sp) },
+                        modifier = Modifier.height(28.dp)
                     )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        AssistChip(
-                            onClick = {
-                                onUpdateAdjustments(
-                                    adjustments.copy(
-                                        customMatrixValues = listOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
-                                    )
+                    AssistChip(
+                        onClick = {
+                            onUpdateAdjustments(
+                                adjustments.copy(
+                                    customMatrixValues = listOf(1.18f, -0.08f, -0.05f, -0.06f, 1.15f, -0.06f, -0.04f, -0.08f, 1.22f)
                                 )
-                            },
-                            label = { Text("Identity", fontSize = 10.5.sp) }
-                        )
-                        AssistChip(
-                            onClick = {
-                                onUpdateAdjustments(
-                                    adjustments.copy(
-                                        customMatrixValues = listOf(
-                                            1.18f, -0.08f, -0.05f,
-                                            -0.06f, 1.15f, -0.06f,
-                                            -0.04f, -0.08f, 1.22f
-                                        )
-                                    )
+                            )
+                        },
+                        label = { Text("Cross-Chroma", fontSize = 10.sp) },
+                        modifier = Modifier.height(28.dp)
+                    )
+                    AssistChip(
+                        onClick = {
+                            onUpdateAdjustments(
+                                adjustments.copy(
+                                    customMatrixValues = listOf(0.90f, 0.15f, 0.0f, 0.05f, 0.95f, 0.05f, 0.0f, 0.12f, 0.92f)
                                 )
-                            },
-                            label = { Text("Cross-Chroma Punch", fontSize = 10.5.sp) }
-                        )
-                        AssistChip(
-                            onClick = {
-                                onUpdateAdjustments(
-                                    adjustments.copy(
-                                        customMatrixValues = listOf(
-                                            0.90f, 0.15f, 0.0f,
-                                            0.05f, 0.95f, 0.05f,
-                                            0.0f, 0.12f, 0.92f
-                                        )
-                                    )
+                            )
+                        },
+                        label = { Text("Tritanopia", fontSize = 10.sp) },
+                        modifier = Modifier.height(28.dp)
+                    )
+                    AssistChip(
+                        onClick = {
+                            onUpdateAdjustments(
+                                adjustments.copy(
+                                    customMatrixValues = listOf(1.05f, 0.12f, 0.0f, 0.08f, 0.92f, 0.0f, 0.0f, 0.05f, 1.10f)
                                 )
-                            },
-                            label = { Text("Tritanopia Assist", fontSize = 10.5.sp) }
-                        )
-                        AssistChip(
-                            onClick = {
-                                onUpdateAdjustments(
-                                    adjustments.copy(
-                                        customMatrixValues = listOf(
-                                            1.05f, 0.12f, 0.0f,
-                                            0.08f, 0.92f, 0.0f,
-                                            0.0f, 0.05f, 1.10f
-                                        )
-                                    )
-                                )
-                            },
-                            label = { Text("Deuteranopia Assist", fontSize = 10.5.sp) }
-                        )
-                    }
+                            )
+                        },
+                        label = { Text("Deuteranopia", fontSize = 10.sp) },
+                        modifier = Modifier.height(28.dp)
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(5.dp))
 
-            // LUT Color Grading Selector
             Text(
-                text = "LUT-Based Color Grading Profile",
-                fontSize = 11.5.sp,
-                fontWeight = FontWeight.SemiBold
+                text = "LUT Color Grading",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(3.dp))
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2148,73 +1888,73 @@ private fun CustomAdjustmentsPanel(
                     val selected = adjustments.lutProfile == lut
                     FilterChip(
                         selected = selected,
-                        onClick = {
-                            onUpdateAdjustments(adjustments.copy(lutProfile = lut))
-                        },
-                        label = { Text(lut.label, fontSize = 11.sp) }
+                        onClick = { onUpdateAdjustments(adjustments.copy(lutProfile = lut)) },
+                        label = { Text(lut.label, fontSize = 10.5.sp) },
+                        modifier = Modifier.height(30.dp)
                     )
                 }
             }
 
             if (adjustments.lutProfile != LutGradingProfile.NONE) {
                 AdjustmentSliderRow(
-                    label = "LUT Grading Intensity",
+                    label = "LUT Intensity",
                     valueText = "${adjustments.lutIntensityPercent.roundToInt()}%",
                     value = adjustments.lutIntensityPercent,
                     valueRange = 0f..100f,
                     defaultValue = 75f,
-                    accentColor = NeonCyan,
+                    accentColor = primaryColor,
                     testTag = "slider_lut_intensity",
                     onValueChange = { onUpdateAdjustments(adjustments.copy(lutIntensityPercent = it)) }
                 )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Save / Restore Custom Configuration Buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = onSaveQuickSlot,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("save_custom_config_button")
-                ) {
-                    Icon(Icons.Default.BookmarkAdd, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Save Config", fontSize = 11.5.sp)
-                }
-
-                OutlinedButton(
-                    onClick = onRestoreQuickSlot,
-                    enabled = hasSavedQuickSlot,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("restore_custom_config_button")
-                ) {
-                    Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Restore Saved", fontSize = 11.5.sp)
-                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Button(
-                    onClick = onSaveAsNewPreset,
+                OutlinedButton(
+                    onClick = onSaveQuickSlot,
+                    shape = RoundedCornerShape(9.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                     modifier = Modifier
                         .weight(1f)
+                        .height(34.dp)
+                        .testTag("save_custom_config_button")
+                ) {
+                    Icon(Icons.Default.BookmarkAdd, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Save Slot", fontSize = 11.sp)
+                }
+
+                OutlinedButton(
+                    onClick = onRestoreQuickSlot,
+                    enabled = hasSavedQuickSlot,
+                    shape = RoundedCornerShape(9.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(34.dp)
+                        .testTag("restore_custom_config_button")
+                ) {
+                    Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Restore", fontSize = 11.sp)
+                }
+
+                Button(
+                    onClick = onSaveAsNewPreset,
+                    shape = RoundedCornerShape(9.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier
+                        .weight(1.15f)
+                        .height(34.dp)
                         .testTag("save_as_preset_button")
                 ) {
-                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Save as New Preset in Library", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("New Preset", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -2240,28 +1980,28 @@ private fun AdjustmentSliderRow(
         ) {
             Text(
                 text = label,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = valueText,
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.Bold,
                     color = accentColor
                 )
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(3.dp))
                 IconButton(
                     onClick = { onValueChange(defaultValue) },
-                    modifier = Modifier.size(26.dp)
+                    modifier = Modifier.size(22.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Replay,
                         contentDescription = "Reset $label",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(13.dp)
                     )
                 }
             }
@@ -2276,7 +2016,7 @@ private fun AdjustmentSliderRow(
             ),
             modifier = Modifier
                 .fillMaxWidth()
-                .height(32.dp)
+                .height(26.dp)
                 .testTag(testTag)
         )
     }
@@ -2305,74 +2045,73 @@ private fun SystemDisplayIntegrationPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "SYSTEM DISPLAY INTEGRATION // REAL HARDWARE APIS",
-                        fontSize = 9.5.sp,
+                        text = "SYSTEM DISPLAY HARDWARE",
+                        fontSize = 9.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = NeonCyan
+                        color = primaryColor
                     )
                     Text(
-                        text = "Display Capabilities & Window Output",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        text = "Panel Capabilities & Output",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
-                IconButton(onClick = onRefreshTelemetry) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh Display Info")
+                IconButton(onClick = onRefreshTelemetry, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh Display Info", modifier = Modifier.size(18.dp))
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    DisplayCapabilityRow("Resolution", telemetry.resolutionLabel, true)
+                    DisplayCapabilityRow("Refresh Rate", telemetry.refreshRateLabel, true)
+                    DisplayCapabilityRow(
+                        "Wide Color (DCI-P3)",
+                        if (telemetry.isWideColorGamutSupported) "Supported" else "Unsupported",
+                        telemetry.isWideColorGamutSupported
+                    )
+                    DisplayCapabilityRow(
+                        "Hardware HDR",
+                        if (telemetry.isHdrSupported) {
+                            "${telemetry.supportedHdrTypes.joinToString(", ")} (${telemetry.maxLuminanceNits.roundToInt()} nits)"
+                        } else "Unsupported",
+                        telemetry.isHdrSupported
+                    )
+                    DisplayCapabilityRow(
+                        "System Settings Write",
+                        if (telemetry.canWriteSystemSettings) "Granted" else "Window-Only",
+                        telemetry.canWriteSystemSettings
+                    )
+                }
+            }
 
-            // Hardware Capability Verification Rows
-            DisplayCapabilityRow("Native Panel Resolution", telemetry.resolutionLabel, true)
-            DisplayCapabilityRow("Active Refresh Rate", telemetry.refreshRateLabel, true)
-            DisplayCapabilityRow(
-                "Wide Color Gamut (DCI-P3) Support",
-                if (telemetry.isWideColorGamutSupported) "Supported by Hardware" else "Not Supported on Panel",
-                telemetry.isWideColorGamutSupported
-            )
-            DisplayCapabilityRow(
-                "Hardware HDR Support",
-                if (telemetry.isHdrSupported) {
-                    "${telemetry.supportedHdrTypes.joinToString(", ")} (Peak ${telemetry.maxLuminanceNits.roundToInt()} nits)"
-                } else {
-                    "Unsupported on Panel"
-                },
-                telemetry.isHdrSupported
-            )
-            DisplayCapabilityRow(
-                "Global System Settings Write",
-                if (telemetry.canWriteSystemSettings) "Granted (WRITE_SETTINGS)" else "Window-Scope Only (Tap below to grant)",
-                telemetry.canWriteSystemSettings
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
-
-            // Supported Display Modes / Refresh Rate Selector
             Text(
-                text = "Supported Display Modes & Refresh Rates",
-                fontSize = 12.sp,
+                text = "Refresh Rate Mode",
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Bold
             )
-            Spacer(modifier = Modifier.height(6.dp))
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 telemetry.supportedModes.forEach { mode ->
                     val isCurrent = mode.modeId == telemetry.activeModeId ||
@@ -2380,21 +2119,18 @@ private fun SystemDisplayIntegrationPanel(
                     FilterChip(
                         selected = isCurrent,
                         onClick = { onSelectDisplayMode(mode) },
-                        label = { Text(mode.label, fontSize = 11.sp) }
+                        label = { Text(mode.label, fontSize = 10.5.sp) },
+                        modifier = Modifier.height(30.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Window Color Mode Selector
             Text(
-                text = "Window Color Space Configuration (API 26+)",
-                fontSize = 12.sp,
+                text = "Window Color Space (API 26+)",
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Bold
             )
-            Spacer(modifier = Modifier.height(6.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 TargetWindowColorMode.entries.forEach { mode ->
                     val isSupported = when (mode) {
                         TargetWindowColorMode.DEFAULT -> true
@@ -2407,58 +2143,54 @@ private fun SystemDisplayIntegrationPanel(
                             .fillMaxWidth()
                             .clickable(enabled = isSupported) { onSelectWindowColorMode(mode) },
                         shape = RoundedCornerShape(10.dp),
-                        color = if (selected) primaryColor.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        color = if (selected) primaryColor.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                         border = BorderStroke(
                             1.dp,
-                            if (selected) primaryColor else MaterialTheme.colorScheme.outline
+                            if (selected) primaryColor else MaterialTheme.colorScheme.outlineVariant
                         )
                     ) {
                         Row(
-                            modifier = Modifier.padding(10.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = mode.label,
-                                    fontSize = 12.sp,
+                                    fontSize = 11.5.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (isSupported) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Text(
-                                    text = if (isSupported) mode.description else "${mode.description} (Hardware unsupported on this device)",
-                                    fontSize = 10.sp,
-                                    color = if (isSupported) MaterialTheme.colorScheme.onSurfaceVariant else DangerRed
+                                    text = if (isSupported) mode.description else "${mode.description} (Unsupported)",
+                                    fontSize = 9.5.sp,
+                                    color = if (isSupported) MaterialTheme.colorScheme.onSurfaceVariant else DangerRed,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             RadioButton(
                                 selected = selected,
                                 onClick = if (isSupported) ({ onSelectWindowColorMode(mode) }) else null,
-                                enabled = isSupported
+                                enabled = isSupported,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Brightness Control
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Display Brightness Control",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Text("Display Brightness", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Text(
                     text = "${brightnessSliderVal.roundToInt()}%",
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.Bold,
                     color = AmberGold
                 )
             }
@@ -2468,7 +2200,8 @@ private fun SystemDisplayIntegrationPanel(
                     brightnessSliderVal = it
                     onChangeBrightness(it.roundToInt())
                 },
-                valueRange = 5f..100f
+                valueRange = 5f..100f,
+                modifier = Modifier.height(26.dp)
             )
 
             if (!telemetry.canWriteSystemSettings && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -2484,11 +2217,15 @@ private fun SystemDisplayIntegrationPanel(
                             context.startActivity(intent)
                         } catch (_: Exception) {}
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    shape = RoundedCornerShape(9.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(34.dp)
                 ) {
-                    Icon(Icons.Default.SettingsBrightness, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.SettingsBrightness, contentDescription = null, modifier = Modifier.size(15.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Grant 'Modify System Settings' for OS-Wide Brightness", fontSize = 11.5.sp)
+                    Text("Grant 'Modify System Settings' Brightness", fontSize = 11.sp)
                 }
             }
         }
@@ -2504,21 +2241,23 @@ private fun DisplayCapabilityRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
+            .padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = label,
-            fontSize = 11.5.sp,
+            fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
             text = value,
-            fontSize = 11.5.sp,
+            fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
-            color = if (isSupported) SuccessGreen else WarningOrange
+            color = if (isSupported) SuccessGreen else WarningOrange,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -2544,11 +2283,11 @@ private fun PerGameProfilesHeaderCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2556,29 +2295,31 @@ private fun PerGameProfilesHeaderCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "PER-GAME VISUAL PROFILES // $profilesCount ACTIVE",
-                        fontSize = 9.5.sp,
+                        text = "PER-GAME PROFILES • $profilesCount ACTIVE",
+                        fontSize = 9.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = NeonCyan
+                        color = primaryColor
                     )
                     Text(
-                        text = "Game-Specific Presets & Display Rules",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        text = "App Display Rules",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
                 Button(
                     onClick = onAddProfileClick,
-                    modifier = Modifier.testTag("add_game_profile_button")
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    shape = RoundedCornerShape(9.dp),
+                    modifier = Modifier
+                        .height(34.dp)
+                        .testTag("add_game_profile_button")
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Add Game", fontSize = 12.sp)
+                    Text("Add Game", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2587,18 +2328,20 @@ private fun PerGameProfilesHeaderCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Foreground Game Detection (UsageStats)",
-                        fontSize = 12.sp,
+                        text = "Auto-Detect Foreground Game",
+                        fontSize = 11.5.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
                         text = if (hasUsageStatsPermission) {
-                            "Authorized • ${lastDetectedFgPkg ?: "Monitoring active foreground app"}"
+                            lastDetectedFgPkg ?: "Monitoring active foreground app"
                         } else {
-                            "Requires Usage Access permission for automatic detection"
+                            "Requires Usage Access permission"
                         },
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontSize = 9.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Switch(
@@ -2608,7 +2351,6 @@ private fun PerGameProfilesHeaderCard(
             }
 
             if (!hasUsageStatsPermission) {
-                Spacer(modifier = Modifier.height(6.dp))
                 OutlinedButton(
                     onClick = {
                         try {
@@ -2618,11 +2360,15 @@ private fun PerGameProfilesHeaderCard(
                             context.startActivity(intent)
                         } catch (_: Exception) {}
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    shape = RoundedCornerShape(9.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(32.dp)
                 ) {
-                    Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Grant Usage Access Permission", fontSize = 11.5.sp)
+                    Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text("Grant Usage Access Permission", fontSize = 11.sp)
                 }
             }
         }
@@ -2640,11 +2386,11 @@ private fun GameVisualProfileCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2653,65 +2399,70 @@ private fun GameVisualProfileCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = profile.appName,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = profile.packageName,
-                        fontSize = 10.sp,
+                        fontSize = 9.5.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = primaryColor.copy(alpha = 0.16f)
+                    shape = RoundedCornerShape(6.dp),
+                    color = primaryColor.copy(alpha = 0.14f)
                 ) {
                     Text(
                         text = profile.assignedPresetName,
-                        fontSize = 10.5.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         color = primaryColor,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
             val details = buildList {
-                if (profile.useCustomOverrides) add("Custom Sliders Override")
-                if (profile.preferredRefreshRateHz > 0f) add("${profile.preferredRefreshRateHz.roundToInt()} Hz Target")
-                if (profile.preferredBrightnessPercent in 5..100) add("Brightness ${profile.preferredBrightnessPercent}%")
+                if (profile.useCustomOverrides) add("Custom Sliders")
+                if (profile.preferredRefreshRateHz > 0f) add("${profile.preferredRefreshRateHz.roundToInt()} Hz")
+                if (profile.preferredBrightnessPercent in 5..100) add("Bri ${profile.preferredBrightnessPercent}%")
                 add(profile.preferredColorMode.label)
             }
             Text(
                 text = details.joinToString(" • "),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-
-            Spacer(modifier = Modifier.height(10.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(
                     onClick = onApplyNow,
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                    modifier = Modifier.height(34.dp)
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.height(30.dp)
                 ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Apply Profile Now", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                    Text("Apply Now", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
 
-                IconButton(onClick = onDelete, modifier = Modifier.size(34.dp)) {
+                IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
                     Icon(
                         imageVector = Icons.Default.DeleteOutline,
                         contentDescription = "Delete Game Profile",
-                        tint = DangerRed
+                        tint = DangerRed,
+                        modifier = Modifier.size(17.dp)
                     )
                 }
             }

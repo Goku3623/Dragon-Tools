@@ -101,6 +101,15 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ui.overlay.ProfilePickerOverlayActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:theme="@style/Theme.TransparentDialog" />
+
         <service
             android:name=".service.DragonMonitorService"
             android:enabled="true"

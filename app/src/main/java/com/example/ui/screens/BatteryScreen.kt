@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -39,13 +40,26 @@ fun BatteryScreen(repository: KernelRepository) {
     val battery by repository.batteryFlow.collectAsState()
     val chargingControls by repository.chargingControlsFlow.collectAsState()
     val freshStartConfig by repository.freshStartConfigFlow.collectAsState()
+    val activeProfile by repository.activeProfileFlow.collectAsState()
+    val activeCustomProfile by repository.activeCustomProfileFlow.collectAsState()
+    val customProfiles by repository.customProfilesFlow.collectAsState()
+    val cpuClusters by repository.cpuClustersFlow.collectAsState()
+    val gpuConfig by repository.gpuConfigFlow.collectAsState()
+    val thermalControl by repository.thermalControlFlow.collectAsState()
+    val perAppConfig by repository.perAppProfileConfigFlow.collectAsState()
+    val installedApps by repository.appsFlow.collectAsState()
+    val isAccessibilityEnabled by repository.isAccessibilityEnabledFlow.collectAsState()
+
     val animatedBatteryProgress by animateFloatAsState(
         targetValue = (battery.levelPercent / 100f).coerceIn(0f, 1f),
         animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
         label = "battery_level_progress"
     )
 
-    var selectedSubTab by remember { mutableStateOf(0) } // 0: Battery & Health, 1: 90W Charging Controls
+    var selectedSubTab by remember { mutableStateOf(0) } // 0: POCO F6 Profiles, 1: Per-App Profiles, 2: Charging Controls, 3: Battery & Health
+    var perAppSearchQuery by remember { mutableStateOf("") }
+    var perAppFilterTab by remember { mutableStateOf(0) }
+    var expandedPerAppPkg by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(
         modifier = Modifier
@@ -109,7 +123,7 @@ fun BatteryScreen(repository: KernelRepository) {
         }
 
         item(key = "battery_subtabs") {
-            // Tab Selector
+            // 4-Tab Selector: POCO F6 Profiles | Per-App | Charging | Health
             PrimaryTabRow(
                 selectedTabIndex = selectedSubTab,
                 containerColor = MaterialTheme.colorScheme.surface,
@@ -119,21 +133,62 @@ fun BatteryScreen(repository: KernelRepository) {
                 Tab(
                     selected = selectedSubTab == 0,
                     onClick = { selectedSubTab = 0 },
-                    text = { Text("Battery & Health", fontWeight = FontWeight.Bold, fontSize = 13.sp) },
-                    icon = { Icon(Icons.Default.BatteryStd, contentDescription = "Battery", modifier = Modifier.size(18.dp)) }
+                    modifier = Modifier.testTag("tab_poco_f6_profiles"),
+                    text = { Text("Profiles", fontWeight = FontWeight.Bold, fontSize = 11.5.sp) },
+                    icon = { Icon(Icons.Default.Speed, contentDescription = "Profiles", modifier = Modifier.size(17.dp)) }
                 )
                 Tab(
                     selected = selectedSubTab == 1,
                     onClick = { selectedSubTab = 1 },
-                    text = { Text("Charging Controls", fontWeight = FontWeight.Bold, fontSize = 13.sp) },
-                    icon = { Icon(Icons.Default.FlashOn, contentDescription = "Charging", modifier = Modifier.size(18.dp)) }
+                    modifier = Modifier.testTag("tab_per_app_profiles"),
+                    text = { Text("Per-App", fontWeight = FontWeight.Bold, fontSize = 11.5.sp) },
+                    icon = { Icon(Icons.Default.AppShortcut, contentDescription = "Per-App", modifier = Modifier.size(17.dp)) }
+                )
+                Tab(
+                    selected = selectedSubTab == 2,
+                    onClick = { selectedSubTab = 2 },
+                    modifier = Modifier.testTag("tab_charging_controls"),
+                    text = { Text("Charging", fontWeight = FontWeight.Bold, fontSize = 11.5.sp) },
+                    icon = { Icon(Icons.Default.FlashOn, contentDescription = "Charging", modifier = Modifier.size(17.dp)) }
+                )
+                Tab(
+                    selected = selectedSubTab == 3,
+                    onClick = { selectedSubTab = 3 },
+                    modifier = Modifier.testTag("tab_battery_health"),
+                    text = { Text("Health", fontWeight = FontWeight.Bold, fontSize = 11.5.sp) },
+                    icon = { Icon(Icons.Default.BatteryStd, contentDescription = "Health", modifier = Modifier.size(17.dp)) }
                 )
             }
             Spacer(modifier = Modifier.height(16.dp))
         }
 
         if (selectedSubTab == 0) {
-            // SUB-TAB 0: BATTERY TELEMETRY & HEALTH
+            pocoF6BatteryProfilesTabItems(
+                repository = repository,
+                activeProfile = activeProfile,
+                activeCustomProfile = activeCustomProfile,
+                customProfiles = customProfiles,
+                cpuClusters = cpuClusters,
+                gpuConfig = gpuConfig,
+                thermalControl = thermalControl,
+                perAppConfig = perAppConfig
+            )
+        } else if (selectedSubTab == 1) {
+            pocoF6PerAppProfilesTabItems(
+                repository = repository,
+                perAppConfig = perAppConfig,
+                installedApps = installedApps,
+                customProfiles = customProfiles,
+                isAccessibilityEnabled = isAccessibilityEnabled,
+                searchQuery = perAppSearchQuery,
+                onSearchQueryChange = { perAppSearchQuery = it },
+                selectedFilterTab = perAppFilterTab,
+                onSelectedFilterTabChange = { perAppFilterTab = it },
+                expandedAppPkg = expandedPerAppPkg,
+                onExpandedAppPkgChange = { expandedPerAppPkg = it }
+            )
+        } else if (selectedSubTab == 3) {
+            // SUB-TAB 3: BATTERY TELEMETRY & HEALTH
             item(key = "battery_telemetry_card") {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -731,31 +786,73 @@ fun BatteryScreen(repository: KernelRepository) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.FlashOn, contentDescription = "Charging Controls", tint = SuccessGreen)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Charging Speed Presets", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            }
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = SuccessGreen.copy(alpha = 0.14f)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Text(
-                                    text = if (chargingControls.manualCurrentLimiterEnabled)
-                                        "CUSTOM ${chargingControls.manualCurrentLimitMa} mA"
+                                Icon(
+                                    imageVector = Icons.Default.FlashOn,
+                                    contentDescription = "Charging Controls",
+                                    tint = if (chargingControls.chargingPresetsEnabled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text("Charging Speed Presets", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    Text(
+                                        text = if (chargingControls.chargingPresetsEnabled)
+                                            "ON • Enforcing ${chargingControls.speedMode.shortLabel} (${chargingControls.speedMode.maxCurrentMa} mA)"
+                                        else
+                                            "OFF • ROM Default Speed & Thermal Active",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (chargingControls.chargingPresetsEnabled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (chargingControls.chargingPresetsEnabled)
+                                        SuccessGreen.copy(alpha = 0.14f)
                                     else
-                                        "${chargingControls.speedMode.shortLabel} • ${chargingControls.speedMode.maxCurrentMa} mA",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = SuccessGreen,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                ) {
+                                    Text(
+                                        text = when {
+                                            chargingControls.manualCurrentLimiterEnabled ->
+                                                "CUSTOM ${chargingControls.manualCurrentLimitMa} mA"
+                                            chargingControls.chargingPresetsEnabled ->
+                                                "ON • ${chargingControls.speedMode.shortLabel}"
+                                            else ->
+                                                "OFF • ROM"
+                                        },
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (chargingControls.chargingPresetsEnabled || chargingControls.manualCurrentLimiterEnabled)
+                                            SuccessGreen
+                                        else
+                                            MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                                Switch(
+                                    checked = chargingControls.chargingPresetsEnabled,
+                                    onCheckedChange = { repository.toggleChargingPresets(it) },
+                                    modifier = Modifier.testTag("charging_presets_switch")
                                 )
                             }
                         }
 
                         Text(
-                            text = "Select max allowable wattage & current ceiling for Xiaomi 90W HyperCharge, 67W Turbo, 33W Fast, or 18W Standard PD charging. Selecting a preset immediately applies its hardware FCC/ICL ceiling.",
+                            text = if (chargingControls.chargingPresetsEnabled) {
+                                "Select max allowable wattage & current ceiling for Xiaomi 90W HyperCharge, 67W Turbo, 33W Fast, or 18W Standard PD charging. Toggle OFF to restore ROM's default charging speed & thermal."
+                            } else {
+                                "Charging Speed Presets are currently OFF. Device charges at ROM's native inbuilt default speed & thermal control. Switch ON or tap any preset below to enforce."
+                            },
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(vertical = 4.dp)
@@ -771,7 +868,8 @@ fun BatteryScreen(repository: KernelRepository) {
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     rowModes.forEach { mode ->
-                                        val isSelected = chargingControls.speedMode == mode &&
+                                        val isSelected = chargingControls.chargingPresetsEnabled &&
+                                            chargingControls.speedMode == mode &&
                                             (!chargingControls.manualCurrentLimiterEnabled || chargingControls.manualCurrentLimitMa == mode.maxCurrentMa)
                                         Card(
                                             modifier = Modifier
@@ -787,6 +885,8 @@ fun BatteryScreen(repository: KernelRepository) {
                                             colors = CardDefaults.cardColors(
                                                 containerColor = if (isSelected)
                                                     SuccessGreen.copy(alpha = 0.12f)
+                                                else if (!chargingControls.chargingPresetsEnabled)
+                                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
                                                 else
                                                     MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                                             )
@@ -801,7 +901,12 @@ fun BatteryScreen(repository: KernelRepository) {
                                                         text = mode.label,
                                                         fontSize = 11.5.sp,
                                                         fontWeight = FontWeight.ExtraBold,
-                                                        color = if (isSelected) SuccessGreen else MaterialTheme.colorScheme.onSurface
+                                                        color = if (isSelected)
+                                                            SuccessGreen
+                                                        else if (!chargingControls.chargingPresetsEnabled)
+                                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
+                                                        else
+                                                            MaterialTheme.colorScheme.onSurface
                                                     )
                                                     if (isSelected) {
                                                         Icon(
@@ -818,7 +923,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                                     fontSize = 10.5.sp,
                                                     fontFamily = FontFamily.Monospace,
                                                     fontWeight = FontWeight.Bold,
-                                                    color = MaterialTheme.colorScheme.primary
+                                                    color = if (chargingControls.chargingPresetsEnabled)
+                                                        MaterialTheme.colorScheme.primary
+                                                    else
+                                                        MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                                 Text(
                                                     text = mode.description,

@@ -58,6 +58,7 @@ fun ThemeStudioSection(
     val activePrimaryOption = GAMING_ACCENT_OPTIONS.getOrElse(themeConfig.primaryAccentIndex) { GAMING_ACCENT_OPTIONS[0] }
     val activeSecondaryOption = GAMING_ACCENT_OPTIONS.getOrElse(themeConfig.secondaryAccentIndex) { GAMING_ACCENT_OPTIONS[1] }
 
+    val isM3Surface = !themeConfig.isLiquidGlassEnabled && themeConfig.surfaceMode == SurfaceThemeMode.MATERIAL_3
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -70,13 +71,21 @@ fun ThemeStudioSection(
                 .fillMaxWidth()
                 .clip(cardShape)
                 .border(
-                    width = 1.5.dp,
+                    width = if (isM3Surface) 1.dp else 1.5.dp,
                     brush = Brush.horizontalGradient(
-                        listOf(
-                            primaryColor.copy(alpha = glowAlpha),
-                            secondaryColor.copy(alpha = (glowAlpha * 0.8f).coerceAtLeast(0.2f)),
-                            primaryColor.copy(alpha = glowAlpha)
-                        )
+                        if (isM3Surface) {
+                            listOf(
+                                MaterialTheme.colorScheme.outlineVariant,
+                                MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                                MaterialTheme.colorScheme.outlineVariant
+                            )
+                        } else {
+                            listOf(
+                                primaryColor.copy(alpha = glowAlpha),
+                                secondaryColor.copy(alpha = (glowAlpha * 0.8f).coerceAtLeast(0.2f)),
+                                primaryColor.copy(alpha = glowAlpha)
+                            )
+                        }
                     ),
                     shape = cardShape
                 ),
@@ -194,6 +203,197 @@ fun ThemeStudioSection(
                             cornerDp = (themeConfig.cornerRadiusDp * 0.7f).roundToInt(),
                             modifier = Modifier.weight(1f)
                         )
+                    }
+                }
+            }
+        }
+
+        // 1A. MATERIAL 3 EXPRESSIVE UI THEME ENGINE
+        val isMaterial3Active = !themeConfig.isLiquidGlassEnabled && themeConfig.surfaceMode == SurfaceThemeMode.MATERIAL_3
+        ElevatedCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("material_3_theme_card"),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = if (isMaterial3Active) {
+                    MaterialTheme.colorScheme.surfaceContainerHigh
+                } else {
+                    MaterialTheme.colorScheme.surface
+                }
+            ),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (isMaterial3Active) 4.dp else 1.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.linearGradient(
+                            colors = if (isMaterial3Active) {
+                                listOf(
+                                    primaryColor.copy(alpha = 0.16f),
+                                    MaterialTheme.colorScheme.tertiary.copy(alpha = 0.08f),
+                                    Color.Transparent
+                                )
+                            } else {
+                                listOf(
+                                    Material3TonalPrimary.copy(alpha = 0.07f),
+                                    Color.Transparent
+                                )
+                            }
+                        )
+                    )
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Surface(
+                            modifier = Modifier.size(38.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (isMaterial3Active) MaterialTheme.colorScheme.primaryContainer else Material3TonalPrimary.copy(alpha = 0.16f)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Layers,
+                                    contentDescription = "Material 3 UI Theme",
+                                    tint = if (isMaterial3Active) MaterialTheme.colorScheme.onPrimaryContainer else Material3TonalPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Material 3 UI Theme",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(50),
+                                    color = if (isMaterial3Active) MaterialTheme.colorScheme.secondaryContainer else Material3TonalPrimary.copy(alpha = 0.14f)
+                                ) {
+                                    Text(
+                                        text = "M3 YOU",
+                                        fontSize = 8.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = if (isMaterial3Active) MaterialTheme.colorScheme.onSecondaryContainer else Material3TonalPrimary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "Tonal surface elevation containers, smooth 22dp cards & Material You accents",
+                                fontSize = 10.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Switch(
+                        checked = isMaterial3Active,
+                        onCheckedChange = { enabled -> repository.toggleMaterial3Ui(enabled) },
+                        modifier = Modifier.testTag("switch_material_3_theme")
+                    )
+                }
+
+                // Material 3 Tonal Role Preview Bar
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val m3Roles = listOf(
+                        Triple("Tonal BG", if (isMaterial3Active) MaterialTheme.colorScheme.background else Material3Bg, MaterialTheme.colorScheme.onSurface),
+                        Triple("Primary Pill", if (isMaterial3Active) MaterialTheme.colorScheme.primaryContainer else Material3TonalPrimary.copy(alpha = 0.25f), Material3TonalPrimary),
+                        Triple("Elevated", if (isMaterial3Active) MaterialTheme.colorScheme.surfaceContainerHighest else Material3SurfaceHighest, Material3TonalSecondary),
+                        Triple("Tertiary", if (isMaterial3Active) MaterialTheme.colorScheme.tertiaryContainer else Material3TonalTertiary.copy(alpha = 0.22f), Material3TonalTertiary)
+                    )
+                    m3Roles.forEach { (roleLabel, fillColor, labelColor) ->
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(34.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            color = fillColor,
+                            border = androidx.compose.foundation.BorderStroke(
+                                0.8.dp,
+                                MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                            )
+                        ) {
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 4.dp)) {
+                                Text(
+                                    text = roleLabel,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = labelColor,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable {
+                                val nextDynamic = !themeConfig.useDynamicColor
+                                if (!isMaterial3Active && nextDynamic) {
+                                    repository.setSurfaceThemeMode(SurfaceThemeMode.MATERIAL_3)
+                                }
+                                repository.toggleDynamicColor(nextDynamic)
+                            },
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Icon(
+                                    imageVector = Icons.Default.Colorize,
+                                    contentDescription = "Wallpaper Material You",
+                                    tint = if (themeConfig.useDynamicColor) primaryColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Wallpaper Dynamic Tones (Android 12+)",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Checkbox(
+                                checked = themeConfig.useDynamicColor,
+                                onCheckedChange = { checked ->
+                                    if (!isMaterial3Active && checked) {
+                                        repository.setSurfaceThemeMode(SurfaceThemeMode.MATERIAL_3)
+                                    }
+                                    repository.toggleDynamicColor(checked)
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -616,12 +816,23 @@ fun ThemeStudioSection(
                 )
 
                 val activeStyle = themeConfig.notificationPanelStyle
+                val previewRadiusDp = when (activeStyle) {
+                    com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> 18.dp
+                    com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> 10.dp
+                    else -> 14.dp
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 10.dp else 14.dp))
+                        .clip(RoundedCornerShape(previewRadiusDp))
                         .background(
                             when (activeStyle) {
+                                com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> Brush.verticalGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        MaterialTheme.colorScheme.surfaceContainer
+                                    )
+                                )
                                 com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f))
                                 com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> Brush.verticalGradient(
                                     listOf(
@@ -640,13 +851,14 @@ fun ThemeStudioSection(
                             }
                         )
                         .border(
-                            width = 1.2.dp,
+                            width = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 0.9.dp else 1.2.dp,
                             color = when (activeStyle) {
+                                com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> MaterialTheme.colorScheme.outlineVariant
                                 com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                                 com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> primaryColor.copy(alpha = 0.65f)
                                 com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Color(0xFFE0F7FA).copy(alpha = 0.65f)
                             },
-                            shape = RoundedCornerShape(if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 10.dp else 14.dp)
+                            shape = RoundedCornerShape(previewRadiusDp)
                         )
                         .padding(if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 8.dp else 12.dp)
                 ) {
@@ -658,6 +870,7 @@ fun ThemeStudioSection(
                         ) {
                             Text(
                                 text = when (activeStyle) {
+                                    com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> "Dragon Tools • Material 3"
                                     com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> "Dragon Tools Telemetry"
                                     com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> "⚡ DRAGON CHROMA HUD"
                                     com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> "❄️ LIQUID GLASS COMPACT"
@@ -665,16 +878,17 @@ fun ThemeStudioSection(
                                 fontSize = if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 11.sp else 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = when (activeStyle) {
+                                    com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> MaterialTheme.colorScheme.primary
                                     com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> MaterialTheme.colorScheme.onSurface
                                     com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> primaryColor
                                     com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Color.White
                                 }
                             )
                             Text(
-                                text = "NOW • ACTIVE",
+                                text = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) "AUTO • 120Hz" else "NOW • ACTIVE",
                                 fontSize = 8.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                fontFamily = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) FontFamily.SansSerif else FontFamily.Monospace,
+                                color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) secondaryColor else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Text(
@@ -688,6 +902,77 @@ fun ThemeStudioSection(
                             fontSize = if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 9.sp else 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        val btnShape = RoundedCornerShape(if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 14.dp else 8.dp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Surface(
+                                modifier = Modifier.weight(1f),
+                                shape = btnShape,
+                                color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) {
+                                    MaterialTheme.colorScheme.secondaryContainer
+                                } else {
+                                    secondaryColor.copy(alpha = 0.16f)
+                                },
+                                border = androidx.compose.foundation.BorderStroke(
+                                    width = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 0.8.dp else 1.dp,
+                                    color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) {
+                                        MaterialTheme.colorScheme.outlineVariant
+                                    } else {
+                                        secondaryColor.copy(alpha = 0.65f)
+                                    }
+                                )
+                            ) {
+                                Text(
+                                    text = "⚡ PROFILE SWITCH",
+                                    fontSize = 9.sp,
+                                    fontFamily = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) FontFamily.SansSerif else FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when (activeStyle) {
+                                        com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Color(0xFF38BDF8)
+                                        com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> MaterialTheme.colorScheme.onSecondaryContainer
+                                        else -> secondaryColor
+                                    },
+                                    modifier = Modifier.padding(vertical = 5.dp, horizontal = 8.dp),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Surface(
+                                modifier = Modifier.weight(1f),
+                                shape = btnShape,
+                                color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    primaryColor.copy(alpha = 0.16f)
+                                },
+                                border = androidx.compose.foundation.BorderStroke(
+                                    width = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 0.8.dp else 1.dp,
+                                    color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) {
+                                        MaterialTheme.colorScheme.outlineVariant
+                                    } else {
+                                        primaryColor.copy(alpha = 0.65f)
+                                    }
+                                )
+                            ) {
+                                Text(
+                                    text = "⏺ RECORD FPS",
+                                    fontSize = 9.sp,
+                                    fontFamily = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) FontFamily.SansSerif else FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when (activeStyle) {
+                                        com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Color.White
+                                        com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> MaterialTheme.colorScheme.onPrimaryContainer
+                                        else -> primaryColor
+                                    },
+                                    modifier = Modifier.padding(vertical = 5.dp, horizontal = 8.dp),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1433,6 +1718,7 @@ fun ThemeStudioSection(
                             SurfaceThemeMode.CRIMSON_ABYSS -> CrimsonAbyssBg
                             SurfaceThemeMode.MIDNIGHT_VIOLET -> MidnightVioletBg
                             SurfaceThemeMode.IOS_LIQUID_GLASS -> LiquidGlassBaseBg
+                            SurfaceThemeMode.MATERIAL_3 -> Material3Bg
                         }
                         val modePreviewCard = when (mode) {
                             SurfaceThemeMode.TRUE_AMOLED_PITCH -> PitchAmoledSurfaceVariant
@@ -1441,6 +1727,7 @@ fun ThemeStudioSection(
                             SurfaceThemeMode.CRIMSON_ABYSS -> CrimsonAbyssSurfaceVariant
                             SurfaceThemeMode.MIDNIGHT_VIOLET -> MidnightVioletSurfaceVariant
                             SurfaceThemeMode.IOS_LIQUID_GLASS -> LiquidGlassFrostSurfaceVariant
+                            SurfaceThemeMode.MATERIAL_3 -> Material3SurfaceVariant
                         }
 
                         Row(
@@ -1666,7 +1953,7 @@ fun ThemeStudioSection(
                 ) {
                     Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Reset to Default ROG Crimson Theme", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Reset to Default Material 3 Theme", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }

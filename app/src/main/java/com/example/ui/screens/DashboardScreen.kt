@@ -52,6 +52,9 @@ fun DashboardScreen(
     val vramConfig by repository.vramConfigFlow.collectAsState()
     val deviceInfo by repository.deviceInfoFlow.collectAsState()
     val themeConfig by repository.themeConfigFlow.collectAsState()
+    val activeProfile by repository.activeProfileFlow.collectAsState()
+    val activeCustomProfile by repository.activeCustomProfileFlow.collectAsState()
+    val perAppConfig by repository.perAppProfileConfigFlow.collectAsState()
     val themeCustomization = LocalThemeCustomization.current
 
     val primaryColor = MaterialTheme.colorScheme.primary
@@ -64,17 +67,26 @@ fun DashboardScreen(
         contentPadding = PaddingValues(bottom = 100.dp)
     ) {
         item(key = "hero_gaming_deck") {
+            val isM3Deck = !themeCustomization.isLiquidGlassEnabled &&
+                    themeCustomization.surfaceMode == com.example.data.model.SurfaceThemeMode.MATERIAL_3
             // Gaming Command Deck Hero Banner
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(
                         Brush.verticalGradient(
-                            listOf(
-                                primaryColor.copy(alpha = (themeCustomization.headerGlowIntensity + 0.08f).coerceIn(0.05f, 0.55f)),
-                                secondaryColor.copy(alpha = (themeCustomization.headerGlowIntensity * 0.35f).coerceIn(0.02f, 0.25f)),
-                                Color.Transparent
-                            )
+                            if (isM3Deck) {
+                                listOf(
+                                    primaryColor.copy(alpha = 0.08f),
+                                    Color.Transparent
+                                )
+                            } else {
+                                listOf(
+                                    primaryColor.copy(alpha = (themeCustomization.headerGlowIntensity + 0.08f).coerceIn(0.05f, 0.55f)),
+                                    secondaryColor.copy(alpha = (themeCustomization.headerGlowIntensity * 0.35f).coerceIn(0.02f, 0.25f)),
+                                    Color.Transparent
+                                )
+                            }
                         )
                     )
                     .padding(horizontal = 16.dp, vertical = 14.dp)
@@ -90,32 +102,34 @@ fun DashboardScreen(
                                 Text(
                                     text = "COMMAND CENTER // ${deviceInfo.boardHardware.uppercase(Locale.US)}",
                                     fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
+                                    fontFamily = if (isM3Deck) FontFamily.SansSerif else FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.2.sp,
+                                    letterSpacing = if (isM3Deck) 0.5.sp else 1.2.sp,
                                     color = secondaryColor
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Box(
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
+                                        .clip(RoundedCornerShape(if (isM3Deck) 10.dp else 6.dp))
                                         .background(
-                                            if (isRootGranted) SuccessGreen.copy(alpha = 0.16f)
+                                            if (isM3Deck) MaterialTheme.colorScheme.surfaceContainerHigh
+                                            else if (isRootGranted) SuccessGreen.copy(alpha = 0.16f)
                                             else WarningOrange.copy(alpha = 0.16f)
                                         )
                                         .border(
-                                            1.dp,
-                                            if (isRootGranted) SuccessGreen.copy(alpha = 0.45f)
+                                            width = if (isM3Deck) 0.8.dp else 1.dp,
+                                            color = if (isM3Deck) MaterialTheme.colorScheme.outlineVariant
+                                            else if (isRootGranted) SuccessGreen.copy(alpha = 0.45f)
                                             else WarningOrange.copy(alpha = 0.45f),
-                                            RoundedCornerShape(6.dp)
+                                            shape = RoundedCornerShape(if (isM3Deck) 10.dp else 6.dp)
                                         )
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text(
                                         text = if (isRootGranted) "HARDWARE SYNC ACTIVE" else "TELEMETRY READY",
                                         fontSize = 9.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.ExtraBold,
+                                        fontFamily = if (isM3Deck) FontFamily.SansSerif else FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
                                         color = if (isRootGranted) SuccessGreen else WarningOrange
                                     )
                                 }
@@ -124,8 +138,8 @@ fun DashboardScreen(
                             Text(
                                 text = "DRAGON TOOLS HUD",
                                 fontSize = 21.sp,
-                                fontWeight = FontWeight.Black,
-                                letterSpacing = 0.8.sp,
+                                fontWeight = if (isM3Deck) FontWeight.Bold else FontWeight.Black,
+                                letterSpacing = if (isM3Deck) 0.2.sp else 0.8.sp,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
@@ -146,9 +160,9 @@ fun DashboardScreen(
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
                                 .border(
-                                    1.dp,
-                                    primaryColor.copy(alpha = 0.35f),
-                                    RoundedCornerShape(12.dp)
+                                    width = if (isM3Deck) 0.8.dp else 1.dp,
+                                    color = if (isM3Deck) MaterialTheme.colorScheme.outlineVariant else primaryColor.copy(alpha = 0.35f),
+                                    shape = RoundedCornerShape(12.dp)
                                 )
                                 .testTag("dashboard_refresh_button")
                         ) {
@@ -157,6 +171,109 @@ fun DashboardScreen(
                                 contentDescription = "Sync Hardware Telemetry",
                                 tint = primaryColor,
                                 modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        item(key = "dashboard_poco_f6_profile_switcher") {
+            val profAccent = profileAccentColor(activeProfile, activeCustomProfile != null)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(
+                                imageVector = profileIcon(activeProfile, activeCustomProfile != null),
+                                contentDescription = null,
+                                tint = profAccent,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "POCO F6 AOSP POWER PROFILE",
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = profAccent
+                                )
+                                Text(
+                                    text = activeCustomProfile?.title ?: activeProfile.title,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+                        FilledTonalButton(
+                            onClick = { onNavigateToTab(1) },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Icon(Icons.Default.AppShortcut, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (perAppConfig.isEnabled) "Per-App (${perAppConfig.rules.size})" else "Per-App OFF",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        com.example.data.model.BatteryProfile.entries.take(3).forEach { prof ->
+                            val selected = activeCustomProfile == null && activeProfile == prof
+                            FilterChip(
+                                selected = selected,
+                                onClick = { repository.setBatteryProfile(prof) },
+                                label = {
+                                    Text(
+                                        text = prof.title,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1
+                                    )
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        com.example.data.model.BatteryProfile.entries.drop(3).forEach { prof ->
+                            val selected = activeCustomProfile == null && activeProfile == prof
+                            FilterChip(
+                                selected = selected,
+                                onClick = { repository.setBatteryProfile(prof) },
+                                label = {
+                                    Text(
+                                        text = prof.title,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1
+                                    )
+                                },
+                                modifier = Modifier.weight(1f)
                             )
                         }
                     }
@@ -441,12 +558,16 @@ fun DashboardScreen(
 
                     // Compact Live Notification Telemetry Readout
                     val activeHudStyle = themeConfig.notificationPanelStyle
+                    val hudShape = RoundedCornerShape(
+                        if (activeHudStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 14.dp else 10.dp
+                    )
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
+                            .clip(hudShape)
                             .background(
                                 when (activeHudStyle) {
+                                    com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.surfaceContainerHigh)
                                     com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
                                     com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> Brush.verticalGradient(
                                         listOf(
@@ -465,13 +586,14 @@ fun DashboardScreen(
                                 }
                             )
                             .border(
-                                width = 1.dp,
+                                width = if (activeHudStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 0.8.dp else 1.dp,
                                 color = when (activeHudStyle) {
+                                    com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> MaterialTheme.colorScheme.outlineVariant
                                     com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
                                     com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> primaryColor.copy(alpha = 0.60f)
                                     com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Color(0xFFE0F7FA).copy(alpha = 0.60f)
                                 },
-                                shape = RoundedCornerShape(10.dp)
+                                shape = hudShape
                             )
                             .padding(horizontal = 9.dp, vertical = 6.dp)
                             .testTag("notification_hud_live_card")

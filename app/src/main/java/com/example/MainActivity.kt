@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.data.repository.KernelRepository
 import com.example.service.DragonMonitorService
+import com.example.ui.components.DragonSplashScreen
 import com.example.ui.screens.*
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.DragonKernelTheme
@@ -62,7 +63,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        ensureUnrestrictedHighRefreshRateWindow()
+        ensureMaxAppRefreshRateWindow()
 
         setContent {
             val accentIndex by repository.accentColorIndexFlow.collectAsState()
@@ -104,14 +105,23 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+        ensureMaxAppRefreshRateWindow()
     }
 
     override fun onResume() {
         super.onResume()
+        ensureMaxAppRefreshRateWindow()
         repository.onMainActivityVisibilityChanged(true)
         try {
             DragonMonitorService.startService(applicationContext)
         } catch (_: Exception) {}
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            ensureMaxAppRefreshRateWindow()
+        }
     }
 
     override fun onPause() {
@@ -124,29 +134,52 @@ class MainActivity : ComponentActivity() {
         repository.onMainActivityVisibilityChanged(false)
     }
 
-    private fun ensureUnrestrictedHighRefreshRateWindow() {
+    /**
+     * Runs this app's own window at the device's maximum supported refresh rate for smooth UI
+     * animations and scrolling without modifying system-wide min_refresh_rate or peak_refresh_rate.
+     */
+    private fun ensureMaxAppRefreshRateWindow() {
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val currentDisplay = display
-                if (currentDisplay != null) {
-                    val supportedModes = currentDisplay.supportedModes
-                    val highRateMode = supportedModes.maxByOrNull { it.refreshRate }
-                    if (highRateMode != null && highRateMode.refreshRate >= 80f) {
-                        window.attributes = window.attributes.apply {
-                            preferredDisplayModeId = highRateMode.modeId
-                            preferredRefreshRate = highRateMode.refreshRate
-                        }
+            val activeDisplay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                display ?: @Suppress("DEPRECATION") windowManager.defaultDisplay
+            } else {
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay
+            } ?: return
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val activeMode = activeDisplay.mode
+                val supportedModes = activeDisplay.supportedModes
+                val sameResolutionModes = if (activeMode != null) {
+                    supportedModes.filter {
+                        it.physicalWidth == activeMode.physicalWidth &&
+                            it.physicalHeight == activeMode.physicalHeight
+                    }
+                } else {
+                    emptyList()
+                }
+                val highRateMode = (sameResolutionModes.ifEmpty { supportedModes.toList() })
+                    .maxByOrNull { it.refreshRate }
+                if (highRateMode != null && highRateMode.refreshRate > 0f) {
+                    val attrs = window.attributes
+                    if (attrs.preferredDisplayModeId != highRateMode.modeId ||
+                        attrs.preferredRefreshRate != highRateMode.refreshRate
+                    ) {
+                        attrs.preferredDisplayModeId = highRateMode.modeId
+                        attrs.preferredRefreshRate = highRateMode.refreshRate
+                        window.attributes = attrs
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                        window.isFrameRatePowerSavingsBalanced = false
+                        window.setFrameRateBoostOnTouchEnabled(true)
+                        window.decorView.requestedFrameRate = highRateMode.refreshRate
                     }
                 }
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                @Suppress("DEPRECATION")
-                val defaultDisplay = windowManager.defaultDisplay
-                val supportedModes = defaultDisplay.supportedModes
-                val highRateMode = supportedModes.maxByOrNull { it.refreshRate }
-                if (highRateMode != null && highRateMode.refreshRate >= 80f) {
+            } else {
+                val maxHz = activeDisplay.refreshRate
+                if (maxHz > 0f && window.attributes.preferredRefreshRate != maxHz) {
                     window.attributes = window.attributes.apply {
-                        preferredDisplayModeId = highRateMode.modeId
-                        preferredRefreshRate = highRateMode.refreshRate
+                        preferredRefreshRate = maxHz
                     }
                 }
             }
@@ -170,6 +203,9 @@ fun DragonKernelMainScreen(
     repository: KernelRepository
 ) {
     var selectedTab by remember { mutableStateOf(NavigationTab.DASHBOARD) }
+    var requestedMoreSection by remember { mutableStateOf<Int?>(null) }
+    var moreHubResetSignal by remember { mutableIntStateOf(0) }
+    var showRedDragonSplash by remember { mutableStateOf(true) }
     val feedbackMessage by repository.lastActionFeedbackFlow.collectAsState()
     val isRootGranted by repository.isRootGrantedFlow.collectAsState()
 
@@ -213,7 +249,10 @@ fun DragonKernelMainScreen(
                     isRootGranted = isRootGranted,
                     isLiquidGlass = isLiquidGlass,
                     refractionIntensity = themeConfig.liquidGlassRefraction,
-                    onFpsClick = { selectedTab = NavigationTab.MORE }
+                    onFpsClick = {
+                        requestedMoreSection = 0
+                        selectedTab = NavigationTab.MORE
+                    }
                 )
             },
             bottomBar = {
@@ -264,7 +303,13 @@ fun DragonKernelMainScreen(
                                 NavigationBarItem(
                                     modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}"),
                                     selected = isSelected,
-                                    onClick = { selectedTab = tab },
+                                    onClick = {
+                                        if (tab == NavigationTab.MORE) {
+                                            requestedMoreSection = null
+                                            moreHubResetSignal++
+                                        }
+                                        selectedTab = tab
+                                    },
                                     icon = {
                                         Icon(
                                             imageVector = tab.icon,
@@ -295,32 +340,41 @@ fun DragonKernelMainScreen(
                         }
                     }
                 } else {
+                    val isMaterial3 = themeConfig.surfaceMode == com.example.data.model.SurfaceThemeMode.MATERIAL_3
+                    val navBgColor = if (isMaterial3) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surface
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surface)
+                            .background(navBgColor)
                     ) {
-                        // Cyber-Gaming Glowing Hairline Accent
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(
-                                    Brush.horizontalGradient(
-                                        listOf(
-                                            Color.Transparent,
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
-                                            NeonCyan.copy(alpha = 0.40f),
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
-                                            Color.Transparent
+                        if (isMaterial3) {
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f),
+                                thickness = 0.8.dp
+                            )
+                        } else {
+                            // Cyber-Gaming Glowing Hairline Accent
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            listOf(
+                                                Color.Transparent,
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                                                NeonCyan.copy(alpha = 0.40f),
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                                                Color.Transparent
+                                            )
                                         )
                                     )
-                                )
-                        )
+                            )
+                        }
                         NavigationBar(
-                            containerColor = MaterialTheme.colorScheme.surface,
+                            containerColor = navBgColor,
                             contentColor = MaterialTheme.colorScheme.onSurface,
-                            tonalElevation = 0.dp,
+                            tonalElevation = if (isMaterial3) 3.dp else 0.dp,
                             windowInsets = WindowInsets.navigationBars
                         ) {
                             NavigationTab.values().forEach { tab ->
@@ -333,7 +387,13 @@ fun DragonKernelMainScreen(
                                 NavigationBarItem(
                                     modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}"),
                                     selected = isSelected,
-                                    onClick = { selectedTab = tab },
+                                    onClick = {
+                                        if (tab == NavigationTab.MORE) {
+                                            requestedMoreSection = null
+                                            moreHubResetSignal++
+                                        }
+                                        selectedTab = tab
+                                    },
                                     icon = {
                                         Icon(
                                             imageVector = tab.icon,
@@ -353,9 +413,9 @@ fun DragonKernelMainScreen(
                                         )
                                     },
                                     colors = NavigationBarItemDefaults.colors(
-                                        selectedIconColor = MaterialTheme.colorScheme.primary,
-                                        selectedTextColor = MaterialTheme.colorScheme.primary,
-                                        indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                                        selectedIconColor = if (isMaterial3) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.primary,
+                                        selectedTextColor = if (isMaterial3) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
+                                        indicatorColor = if (isMaterial3) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
                                         unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                                         unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -397,10 +457,30 @@ fun DragonKernelMainScreen(
                     NavigationTab.FRAMEGEN -> FrameGenScreen(repository = repository)
                     NavigationTab.VISUAL_STYLE -> VisualStyleScreen(repository = repository)
                     NavigationTab.DOWNLOADER -> DownloaderScreen(repository = repository)
-                    NavigationTab.MORE -> ToolsScreen(repository = repository)
+                    NavigationTab.MORE -> ToolsScreen(
+                        repository = repository,
+                        requestedSection = requestedMoreSection,
+                        resetHubSignal = moreHubResetSignal,
+                        onConsumeRequestedSection = { requestedMoreSection = null },
+                        onNavigateToMainTab = { tabIndex ->
+                            selectedTab = when (tabIndex) {
+                                1 -> NavigationTab.BATTERY
+                                3 -> NavigationTab.ABOUT
+                                4 -> NavigationTab.FRAMEGEN
+                                5 -> NavigationTab.VISUAL_STYLE
+                                else -> NavigationTab.DASHBOARD
+                            }
+                        }
+                    )
                     NavigationTab.ABOUT -> AboutScreen(repository = repository)
                 }
             }
+        }
+
+        if (showRedDragonSplash) {
+            DragonSplashScreen(
+                onDismiss = { showRedDragonSplash = false }
+            )
         }
     }
 }
@@ -700,10 +780,14 @@ private fun DragonGamingHudTopBar(
         return
     }
 
+    val isMaterial3Bar = com.example.ui.theme.LocalThemeCustomization.current.surfaceMode == com.example.data.model.SurfaceThemeMode.MATERIAL_3 && !isLiquidGlass
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
+            .background(
+                if (isMaterial3Bar) MaterialTheme.colorScheme.surfaceContainer
+                else MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+            )
             .windowInsetsPadding(WindowInsets.statusBars)
     ) {
         Row(
@@ -725,9 +809,9 @@ private fun DragonGamingHudTopBar(
                 Text(
                     text = "DRAGON TOOLS",
                     fontSize = 13.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 1.2.sp,
-                    color = primaryColor
+                    fontWeight = if (isMaterial3Bar) FontWeight.Bold else FontWeight.Black,
+                    letterSpacing = if (isMaterial3Bar) 0.4.sp else 1.2.sp,
+                    color = if (isMaterial3Bar) MaterialTheme.colorScheme.onSurface else primaryColor
                 )
             }
 
@@ -739,9 +823,16 @@ private fun DragonGamingHudTopBar(
                 // Live FPS Pill
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(fpsColor.copy(alpha = 0.12f))
-                        .border(1.dp, fpsColor.copy(alpha = 0.38f), RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(if (isMaterial3Bar) 12.dp else 8.dp))
+                        .background(
+                            if (isMaterial3Bar) MaterialTheme.colorScheme.surfaceContainerHigh
+                            else fpsColor.copy(alpha = 0.12f)
+                        )
+                        .border(
+                            width = if (isMaterial3Bar) 0.8.dp else 1.dp,
+                            color = if (isMaterial3Bar) MaterialTheme.colorScheme.outlineVariant else fpsColor.copy(alpha = 0.38f),
+                            shape = RoundedCornerShape(if (isMaterial3Bar) 12.dp else 8.dp)
+                        )
                         .clickable(onClick = onFpsClick)
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                         .testTag("hud_fps_pill")
@@ -749,8 +840,8 @@ private fun DragonGamingHudTopBar(
                     Text(
                         text = "$currentFps FPS",
                         fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.ExtraBold,
+                        fontFamily = if (isMaterial3Bar) FontFamily.SansSerif else FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
                         color = fpsColor
                     )
                 }
@@ -758,9 +849,16 @@ private fun DragonGamingHudTopBar(
                 // CPU Temp Pill
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(tempColor.copy(alpha = 0.12f))
-                        .border(1.dp, tempColor.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(if (isMaterial3Bar) 12.dp else 8.dp))
+                        .background(
+                            if (isMaterial3Bar) MaterialTheme.colorScheme.surfaceContainerHigh
+                            else tempColor.copy(alpha = 0.12f)
+                        )
+                        .border(
+                            width = if (isMaterial3Bar) 0.8.dp else 1.dp,
+                            color = if (isMaterial3Bar) MaterialTheme.colorScheme.outlineVariant else tempColor.copy(alpha = 0.35f),
+                            shape = RoundedCornerShape(if (isMaterial3Bar) 12.dp else 8.dp)
+                        )
                         .padding(horizontal = 7.dp, vertical = 4.dp)
                 ) {
                     Text(

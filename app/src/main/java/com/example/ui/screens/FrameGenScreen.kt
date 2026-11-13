@@ -9,7 +9,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.rememberScrollState
@@ -44,6 +50,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeveloperBoard
 import androidx.compose.material.icons.filled.DisplaySettings
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Refresh
@@ -67,9 +75,11 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -78,11 +88,13 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -190,8 +202,8 @@ fun FrameGenScreen(repository: KernelRepository) {
         modifier = Modifier
             .fillMaxSize()
             .testTag("framegen_screen_list"),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         // 1. Compact Dragon FrameGen Engine Master Panel
         item(key = "card_hero_master") {
@@ -332,7 +344,127 @@ fun FrameGenScreen(repository: KernelRepository) {
         }
 
         item(key = "card_bottom_spacer") {
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun CompactExpandableFrameGenCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    accentColor: Color,
+    cardCorner: RoundedCornerShape,
+    expanded: Boolean,
+    onToggleExpand: () -> Unit,
+    borderColor: Color = accentColor.copy(alpha = 0.28f),
+    testTag: String? = null,
+    headerAction: (@Composable () -> Unit)? = null,
+    alwaysVisibleStrip: (@Composable () -> Unit)? = null,
+    content: @Composable () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
+            .border(0.9.dp, borderColor, cardCorner),
+        shape = cardCorner,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .minimumInteractiveComponentSize()
+                    .clickable(onClick = onToggleExpand)
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(accentColor.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = title,
+                            tint = accentColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = title,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = subtitle,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (headerAction != null) {
+                        headerAction()
+                    }
+                    Icon(
+                        imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (expanded) "Collapse $title" else "Expand $title",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            if (alwaysVisibleStrip != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, bottom = if (expanded) 4.dp else 9.dp)
+                ) {
+                    alwaysVisibleStrip()
+                }
+            }
+
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(animationSpec = spring()) + fadeIn(),
+                exit = shrinkVertically(animationSpec = spring()) + fadeOut()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+                ) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                        modifier = Modifier.padding(bottom = 10.dp)
+                    )
+                    content()
+                }
+            }
         }
     }
 }
@@ -514,71 +646,29 @@ private fun FrameGenTargetGamesCard(
     onOpenAddGameDialog: () -> Unit,
     onRemoveGame: (String) -> Unit
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, primaryColor.copy(alpha = 0.35f), cardCorner),
-        shape = cardCorner,
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF10141E))
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val subtitleText = when {
+        addedGames.isEmpty() -> "No games added • Tap + ADD to choose targets"
+        telemetry.isForegroundAddedGame -> "In foreground: ${telemetry.activeForegroundTitle}"
+        else -> "${addedGames.size} game(s) • Standby (${telemetry.activeForegroundTitle})"
+    }
+
+    CompactExpandableFrameGenCard(
+        title = "Target Games (${addedGames.size})",
+        subtitle = subtitleText,
+        icon = Icons.Default.SportsEsports,
+        accentColor = if (telemetry.isForegroundAddedGame) Color(0xFF00E676) else primaryColor,
+        cardCorner = cardCorner,
+        expanded = expanded,
+        onToggleExpand = { expanded = !expanded },
+        headerAction = {
+            FilledTonalButtonCompat(
+                onClick = onOpenAddGameDialog,
+                primaryColor = primaryColor
+            )
+        }
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Icon(
-                        imageVector = Icons.Default.SportsEsports,
-                        contentDescription = "Target Games",
-                        tint = primaryColor,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = "TARGET GAMES (${addedGames.size} ADDED)",
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Black,
-                            color = Color.White,
-                            letterSpacing = 0.6.sp
-                        )
-                        Text(
-                            text = "Auto-activates FrameGen & Mini Floating FPS Window when selected game opens; auto-closes when game closes",
-                            fontSize = 9.5.sp,
-                            color = Color(0xFF90A4AE)
-                        )
-                    }
-                }
-
-                Button(
-                    onClick = onOpenAddGameDialog,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    modifier = Modifier
-                        .height(32.dp)
-                        .testTag("framegen_add_game_button"),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = primaryColor,
-                        contentColor = Color.Black
-                    )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "Add Game Manually",
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "ADD GAME",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
+        Column(modifier = Modifier.fillMaxWidth()) {
             // Real-Time Foreground App Tracker Bar
             val isFgTarget = telemetry.isForegroundAddedGame
             val fgBorderCol = if (isFgTarget) Color(0xFF00E676) else Color(0xFF263238)
@@ -738,6 +828,37 @@ private fun FrameGenTargetGamesCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun FilledTonalButtonCompat(
+    onClick: () -> Unit,
+    primaryColor: Color
+) {
+    Button(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+        modifier = Modifier
+            .height(28.dp)
+            .testTag("framegen_add_game_button"),
+        shape = RoundedCornerShape(8.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = primaryColor,
+            contentColor = Color.Black
+        )
+    ) {
+        Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = "Add Game Manually",
+            modifier = Modifier.size(13.dp)
+        )
+        Spacer(modifier = Modifier.width(3.dp))
+        Text(
+            text = "ADD",
+            fontSize = 9.5.sp,
+            fontWeight = FontWeight.ExtraBold
+        )
     }
 }
 
@@ -1080,52 +1201,50 @@ private fun FrameGenRealtimeTelemetryCard(
     secondaryColor: Color,
     cardCorner: RoundedCornerShape
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, primaryColor.copy(alpha = 0.32f), cardCorner),
-        shape = cardCorner,
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF10141E))
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+
+    CompactExpandableFrameGenCard(
+        title = "Live FPS Telemetry",
+        subtitle = "${capabilities.peakRefreshRateHz}Hz VSync • ${if (telemetry.isActive) "${config.mode.label} Active" else "Standby"}",
+        icon = Icons.Default.Speed,
+        accentColor = primaryColor,
+        cardCorner = cardCorner,
+        expanded = expanded,
+        onToggleExpand = { expanded = !expanded },
+        alwaysVisibleStrip = {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Speed,
-                        contentDescription = "Real-time FPS Telemetry",
-                        tint = primaryColor,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "REAL-TIME PERFORMANCE TELEMETRY",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Black,
-                        color = Color.White,
-                        letterSpacing = 0.7.sp
-                    )
-                }
-                Text(
-                    text = "${capabilities.peakRefreshRateHz}Hz VSYNC",
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = secondaryColor
+                CompactFpsPill(
+                    modifier = Modifier.weight(1f),
+                    label = "NATIVE",
+                    value = "${telemetry.nativeFps}",
+                    accentColor = Color(0xFF29B6F6)
+                )
+                CompactFpsPill(
+                    modifier = Modifier.weight(1f),
+                    label = "GENERATED",
+                    value = "+${telemetry.generatedFps}",
+                    accentColor = if (telemetry.generatedFps > 0) Color(0xFF00E676) else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                CompactFpsPill(
+                    modifier = Modifier.weight(1f),
+                    label = "PRESENTED",
+                    value = "${telemetry.totalPresentedFps}",
+                    accentColor = primaryColor
                 )
             }
-
-            Spacer(modifier = Modifier.height(6.dp))
+        }
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             Text(
-                text = "Native rendered frames and motion-interpolated frames are tracked separately. Generated frames are never reported as native FPS.",
+                text = "Native rendered frames and motion-interpolated frames are tracked separately.",
                 fontSize = 10.sp,
-                color = Color(0xFF90A4AE)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Primary 3-Column FPS Split: Native FPS | +Generated FPS | = Total Presented FPS
             Row(
@@ -1257,6 +1376,38 @@ private fun FrameGenRealtimeTelemetryCard(
 }
 
 @Composable
+private fun CompactFpsPill(
+    modifier: Modifier = Modifier,
+    label: String,
+    value: String,
+    accentColor: Color
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(0.8.dp, accentColor.copy(alpha = 0.38f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            fontSize = 8.5.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            fontSize = 13.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.ExtraBold,
+            color = accentColor
+        )
+    }
+}
+
+@Composable
 private fun FpsPrimaryMetricBox(
     modifier: Modifier = Modifier,
     label: String,
@@ -1352,6 +1503,7 @@ private fun FrameGenOpticalFlowVisualizerCard(
     onToggleShowVectors: (Boolean) -> Unit,
     onBenchmarkSample: (Float, Float, Float) -> Unit
 ) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
     val simWidth = 64
     val simHeight = 36
     var motionSpeed by remember { mutableFloatStateOf(1.0f) }
@@ -1366,7 +1518,8 @@ private fun FrameGenOpticalFlowVisualizerCard(
     val srcRect = remember { Rect(0, 0, simWidth, simHeight) }
     val drawPaint = remember { Paint().apply { isFilterBitmap = true } }
 
-    LaunchedEffect(config.quality, config.intensity, config.mode, motionSpeed) {
+    LaunchedEffect(expanded, config.quality, config.intensity, config.mode, motionSpeed) {
+        if (!expanded) return@LaunchedEffect
         var step = 0
         while (isActive) {
             val t0Angle = step * 0.14f * motionSpeed
@@ -1407,46 +1560,22 @@ private fun FrameGenOpticalFlowVisualizerCard(
         }
     }
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, secondaryColor.copy(alpha = 0.35f), cardCorner),
-        shape = cardCorner,
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF10141E))
+    val summarySub = if (config.losslessDllActive) {
+        "LSFG Subpixel Warp • Vectors ${if (config.showMotionVectorsInVisualizer) "ON" else "OFF"}"
+    } else {
+        "2D Motion Vectors • ${config.mode.label} Optical Warp Preview"
+    }
+
+    CompactExpandableFrameGenCard(
+        title = "Optical Flow Visualizer",
+        subtitle = summarySub,
+        icon = Icons.Default.AutoAwesomeMotion,
+        accentColor = secondaryColor,
+        cardCorner = cardCorner,
+        expanded = expanded,
+        onToggleExpand = { expanded = !expanded }
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesomeMotion,
-                        contentDescription = "Optical Flow Engine Live Verification",
-                        tint = secondaryColor,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = "LIVE OPTICAL FLOW & TEMPORAL SYNTHESIS BENCHMARK",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Black,
-                            color = Color.White,
-                            letterSpacing = 0.6.sp
-                        )
-                        Text(
-                            text = if (config.losslessDllActive) "⚡ LSFG 2.3 Subpixel Catmull-Rom Warp & Anti-Ghosting Shield" else "Real 2D Diamond-Search Motion Vectors + Occlusion-Safe Frame Warping",
-                            fontSize = 10.sp,
-                            color = if (config.losslessDllActive) Color(0xFFFFD700) else Color(0xFF90A4AE)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
+        Column(modifier = Modifier.fillMaxWidth()) {
             // Live Canvas showing T0 (Native), T_interp (Motion-Compensated Synthesized + Vectors), and T1 (Native)
             val currentRes = synthesisResult
             Canvas(
@@ -1689,33 +1818,18 @@ private fun FrameGenSettingsCard(
     onSelectFloatingSize: (FrameGenFloatingSize) -> Unit,
     onToggleFloatingPreview: (Boolean) -> Unit
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, primaryColor.copy(alpha = 0.32f), cardCorner),
-        shape = cardCorner,
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF10141E))
+    var expanded by rememberSaveable { mutableStateOf(false) }
+
+    CompactExpandableFrameGenCard(
+        title = "FrameGen & HUD Settings",
+        subtitle = "${config.mode.label} • ${config.quality.label} • ${config.targetFps} FPS • ${(config.intensity * 100).roundToInt()}%",
+        icon = Icons.Default.Tune,
+        accentColor = primaryColor,
+        cardCorner = cardCorner,
+        expanded = expanded,
+        onToggleExpand = { expanded = !expanded }
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Tune,
-                    contentDescription = "FrameGen Settings",
-                    tint = primaryColor,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "FRAME GENERATION SETTINGS",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Black,
-                    color = Color.White,
-                    letterSpacing = 0.7.sp
-                )
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
+        Column(modifier = Modifier.fillMaxWidth()) {
             // 1. Frame Generation Mode: 2X vs 3X (3X automatically disabled if unsupported)
             Text(
                 text = "FRAME GENERATION MODE",
@@ -2579,57 +2693,37 @@ private fun FrameGenHardwareDetectionCard(
     cardCorner: RoundedCornerShape,
     onRescanHardware: () -> Unit
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, primaryColor.copy(alpha = 0.28f), cardCorner),
-        shape = cardCorner,
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF10141E))
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+    var expanded by rememberSaveable { mutableStateOf(false) }
+
+    CompactExpandableFrameGenCard(
+        title = "Hardware & Graphics Pipeline",
+        subtitle = "${capabilities.detectedBackend.title} • ${capabilities.peakRefreshRateHz}Hz • ${capabilities.gpuRenderer.take(18)}",
+        icon = Icons.Default.DeveloperBoard,
+        accentColor = primaryColor,
+        cardCorner = cardCorner,
+        expanded = expanded,
+        onToggleExpand = { expanded = !expanded },
+        headerAction = {
+            OutlinedButton(
+                onClick = onRescanHardware,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                modifier = Modifier
+                    .height(28.dp)
+                    .testTag("framegen_rescan_button"),
+                border = BorderStroke(1.dp, primaryColor.copy(alpha = 0.55f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = primaryColor)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.DeveloperBoard,
-                        contentDescription = "Hardware Detection",
-                        tint = primaryColor,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "HARDWARE & GRAPHICS PIPELINE DETECTION",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Black,
-                        color = Color.White,
-                        letterSpacing = 0.7.sp
-                    )
-                }
-
-                OutlinedButton(
-                    onClick = onRescanHardware,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    modifier = Modifier
-                        .height(32.dp)
-                        .testTag("framegen_rescan_button"),
-                    border = BorderStroke(1.dp, primaryColor.copy(alpha = 0.6f)),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = primaryColor)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Re-scan Hardware",
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(text = "RE-SCAN", fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Re-scan Hardware",
+                    modifier = Modifier.size(12.dp)
+                )
+                Spacer(modifier = Modifier.width(3.dp))
+                Text(text = "SCAN", fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
+        }
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             HardwareSpecRow("Android Version", capabilities.androidVersion)
             HardwareSpecRow("GPU & Vendor", "${capabilities.gpuRenderer} (${capabilities.gpuVendor})")
             HardwareSpecRow("GPU Driver", capabilities.gpuDriverVersion)
@@ -2700,50 +2794,18 @@ private fun FrameGenGameCompatibilityAndArchitectureCard(
     onRemoveGame: (String) -> Unit,
     onOpenAddGameDialog: () -> Unit
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, secondaryColor.copy(alpha = 0.28f), cardCorner),
-        shape = cardCorner,
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF10141E))
+    var expanded by rememberSaveable { mutableStateOf(false) }
+
+    CompactExpandableFrameGenCard(
+        title = "Compatibility & Architecture",
+        subtitle = "${detectedGames.size} detected • ${telemetry.activeGameEngine.label}",
+        icon = Icons.Default.Security,
+        accentColor = secondaryColor,
+        cardCorner = cardCorner,
+        expanded = expanded,
+        onToggleExpand = { expanded = !expanded }
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Icon(
-                        imageVector = Icons.Default.SportsEsports,
-                        contentDescription = "Gaming Compatibility",
-                        tint = secondaryColor,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "GAME ENGINE COMPATIBILITY & PIPELINE",
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Black,
-                        color = Color.White,
-                        letterSpacing = 0.6.sp
-                    )
-                }
-                OutlinedButton(
-                    onClick = onOpenAddGameDialog,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    modifier = Modifier.height(28.dp),
-                    border = BorderStroke(1.dp, secondaryColor.copy(alpha = 0.6f)),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = secondaryColor)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(12.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("ADD MANUAL", fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
+        Column(modifier = Modifier.fillMaxWidth()) {
             // Active Foreground Pipeline Status
             Box(
                 modifier = Modifier
@@ -2907,165 +2969,76 @@ fun LosslessDllMasterCard(
     onInspectPe: () -> Unit,
     onRemoveDll: () -> Unit
 ) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
     val goldColor = Color(0xFFFFD700)
     val emeraldColor = Color(0xFF00E676)
     val isEngaged = dllInfo.isImported && config.losslessDllActive
 
     val borderColor by animateColorAsState(
         targetValue = when {
-            isEngaged -> goldColor.copy(alpha = 0.75f)
-            dllInfo.isImported -> Color(0xFFFFB300).copy(alpha = 0.5f)
-            else -> primaryColor.copy(alpha = 0.35f)
+            isEngaged -> goldColor.copy(alpha = 0.65f)
+            dllInfo.isImported -> Color(0xFFFFB300).copy(alpha = 0.45f)
+            else -> primaryColor.copy(alpha = 0.28f)
         },
         label = "lossless_border_anim"
     )
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("lossless_dll_master_card"),
-        shape = cardCorner,
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF141923)),
-        border = BorderStroke(1.dp, borderColor)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            // Header Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(
-                                if (isEngaged) goldColor.copy(alpha = 0.18f)
-                                else primaryColor.copy(alpha = 0.16f)
-                            )
-                            .border(
-                                1.dp,
-                                if (isEngaged) goldColor.copy(alpha = 0.6f)
-                                else primaryColor.copy(alpha = 0.4f),
-                                RoundedCornerShape(8.dp)
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Memory,
-                            contentDescription = "Lossless Scaling Core",
-                            tint = if (isEngaged) goldColor else primaryColor,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "LOSSLESS.DLL ENGINE",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Black,
-                                color = if (isEngaged) goldColor else Color.White,
-                                letterSpacing = 0.8.sp
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(
-                                        if (isEngaged) goldColor.copy(alpha = 0.2f)
-                                        else Color(0xFF263238)
-                                    )
-                                    .border(
-                                        0.8.dp,
-                                        if (isEngaged) goldColor.copy(alpha = 0.8f)
-                                        else Color(0xFF546E7A),
-                                        RoundedCornerShape(4.dp)
-                                    )
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = if (isEngaged) "⚡ LSFG 2X/3X" else "LSFG PE",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isEngaged) goldColor else Color(0xFF90A4AE)
-                                )
-                            }
+    val subtitleText = when {
+        isEngaged -> "ACTIVE • ${dllInfo.fileName}"
+        dllInfo.isImported -> "STANDBY • ${dllInfo.fileName}"
+        else -> "Optional PE Optical Flow Core (Tap to import)"
+    }
+
+    CompactExpandableFrameGenCard(
+        title = "Lossless.dll Core",
+        subtitle = subtitleText,
+        icon = Icons.Default.Memory,
+        accentColor = if (isEngaged) goldColor else primaryColor,
+        cardCorner = cardCorner,
+        expanded = expanded,
+        onToggleExpand = { expanded = !expanded },
+        borderColor = borderColor,
+        testTag = "lossless_dll_master_card",
+        headerAction = {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        when {
+                            isEngaged -> emeraldColor.copy(alpha = 0.16f)
+                            dllInfo.isImported -> Color(0xFFFFB300).copy(alpha = 0.16f)
+                            else -> MaterialTheme.colorScheme.surfaceVariant
                         }
-                        Text(
-                            text = if (dllInfo.isImported) dllInfo.detectedProfile.ifBlank { "Custom PE Binary & Optical Flow Core" } else "Custom PE Binary & Optical Flow Core",
-                            fontSize = 10.sp,
-                            color = Color(0xFF90A4AE)
-                        )
+                    )
+                    .padding(horizontal = 7.dp, vertical = 3.dp)
+            ) {
+                Text(
+                    text = when {
+                        isEngaged -> "ACTIVE"
+                        dllInfo.isImported -> "LOADED"
+                        else -> "NO DLL"
+                    },
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = when {
+                        isEngaged -> emeraldColor
+                        dllInfo.isImported -> Color(0xFFFFB300)
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
                     }
-                }
-
-                // Status Badge
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(
-                            when {
-                                isEngaged -> emeraldColor.copy(alpha = 0.15f)
-                                dllInfo.isImported -> Color(0xFFFFB300).copy(alpha = 0.15f)
-                                else -> Color(0xFF37474F).copy(alpha = 0.5f)
-                            }
-                        )
-                        .border(
-                            1.dp,
-                            when {
-                                isEngaged -> emeraldColor.copy(alpha = 0.8f)
-                                dllInfo.isImported -> Color(0xFFFFB300).copy(alpha = 0.6f)
-                                else -> Color(0xFF546E7A).copy(alpha = 0.4f)
-                            },
-                            RoundedCornerShape(12.dp)
-                        )
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    when {
-                                        isEngaged -> emeraldColor
-                                        dllInfo.isImported -> Color(0xFFFFB300)
-                                        else -> Color(0xFF78909C)
-                                    }
-                                )
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = when {
-                                isEngaged -> "ACTIVE"
-                                dllInfo.isImported -> "STANDBY"
-                                else -> "NO DLL"
-                            },
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = when {
-                                isEngaged -> emeraldColor
-                                dllInfo.isImported -> Color(0xFFFFB300)
-                                else -> Color(0xFFB0BEC5)
-                            }
-                        )
-                    }
-                }
+                )
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
+        }
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             // Subtitle Description
             Text(
-                text = "Import a Windows PE binary (lossless.dll / LosslessScaling.dll) from device storage or load the reference LSFG 2.3 Core. Enables subpixel Catmull-Rom warping, anti-ghosting HUD shield, and 99.4%+ optical flow confidence.",
-                fontSize = 11.sp,
-                color = Color(0xFFB0BEC5),
-                lineHeight = 15.sp
+                text = "Import a Windows PE binary (lossless.dll) or load LSFG 2.3 Core for subpixel Catmull-Rom warping and anti-ghosting.",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 14.sp
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             if (dllInfo.isImported) {
                 // DLL Specs Card

@@ -2,6 +2,7 @@ package com.example.xposed
 
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.Context
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
@@ -12,7 +13,7 @@ import com.example.data.repository.KernelRepository
 
 /**
  * Cross-process ContentProvider that allows LSPosed hooks running inside target apps
- * (Facebook, Instagram, YouTube, TikTok, Snapchat, X, Reddit, Games) to read live
+ * (Facebook, Instagram, YouTube, TikTok, Snapchat, X, Reddit, Browsers, Games) to read live
  * Ad Blocker & FrameGen configuration on Android 11-16 and report real in-process intercepts.
  */
 class DragonLSPosedConfigProvider : ContentProvider() {
@@ -47,16 +48,19 @@ class DragonLSPosedConfigProvider : ContentProvider() {
                 "xposed_hook_youtube_video",
                 "xposed_hook_ad_sdks",
                 "xposed_hook_network_webview",
-                "xposed_hook_json_graphql"
+                "xposed_hook_json_graphql",
+                "whitelisted_domains_csv",
+                "block_quic",
+                "disabled_platforms_csv"
             )
         )
 
         val ctx = context ?: return cursor
         try {
-            val adPrefs = ctx.getSharedPreferences("dragon_adblocker_prefs", android.content.Context.MODE_PRIVATE)
-            val fgPrefs = ctx.getSharedPreferences("dragon_framegen_prefs", android.content.Context.MODE_PRIVATE)
+            val (adPrefs, _) = DragonXposedModule.openAdBlockerSharedPrefs(ctx)
+            val fgPrefs = ctx.getSharedPreferences("dragon_framegen_prefs", Context.MODE_PRIVATE)
 
-            val globalEnabled = adPrefs.getBoolean("adblock_global_enabled", true)
+            val globalEnabled = adPrefs.getBoolean("adblock_global_enabled", false)
             val videoAds = adPrefs.getBoolean("adblock_video_ads", true)
             val sponsored = adPrefs.getBoolean("adblock_sponsored", true)
             val telemetry = adPrefs.getBoolean("adblock_telemetry", true)
@@ -64,6 +68,15 @@ class DragonLSPosedConfigProvider : ContentProvider() {
             val autoSkip = adPrefs.getBoolean("adblock_auto_skip_inapp", true)
             val autoSwipe = adPrefs.getBoolean("adblock_auto_swipe_reels", true)
             val customBlacklist = adPrefs.getStringSet("adblock_custom_blacklist", emptySet()) ?: emptySet()
+            val customWhitelist = adPrefs.getStringSet("adblock_custom_whitelist", emptySet()) ?: emptySet()
+            val blockQuic = adPrefs.getBoolean("adblock_block_quic", true)
+
+            val disabledPackages = mutableListOf<String>()
+            SocialPlatform.values().forEach { platform ->
+                if (!adPrefs.getBoolean("adblock_platform_${platform.id}", true)) {
+                    disabledPackages.addAll(platform.packageNames)
+                }
+            }
 
             val hookLitho = adPrefs.getBoolean("adblock_xposed_litho", true)
             val hookYtVideo = adPrefs.getBoolean("adblock_xposed_yt_video", true)
@@ -90,7 +103,10 @@ class DragonLSPosedConfigProvider : ContentProvider() {
                     if (hookYtVideo) 1 else 0,
                     if (hookAdSdks) 1 else 0,
                     if (hookNetWebView) 1 else 0,
-                    if (hookJsonGraphQl) 1 else 0
+                    if (hookJsonGraphQl) 1 else 0,
+                    customWhitelist.joinToString(","),
+                    if (blockQuic) 1 else 0,
+                    disabledPackages.joinToString(",")
                 )
             )
         } catch (_: Exception) {
@@ -100,18 +116,30 @@ class DragonLSPosedConfigProvider : ContentProvider() {
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         val ctx = context ?: return null
-        if (method == "report_lsposed_intercept") {
-            try {
-                val pkg = extras?.getString("package_name") ?: arg ?: ""
-                val descriptor = extras?.getString("descriptor") ?: "LSPosed In-Process Hook"
-                val action = extras?.getString("action") ?: "LSPOSED_BLOCKED"
-                val platform = AdBlockerEngine.detectSocialPlatform(pkg) ?: SocialPlatform.OTHER_SOCIAL
-                KernelRepository.getInstance(ctx).recordRealSocialAdIntercept(
-                    platform = platform,
-                    descriptor = descriptor,
-                    action = action
-                )
-            } catch (_: Exception) {
+        when (method) {
+            "report_lsposed_intercept" -> {
+                try {
+                    val pkg = extras?.getString("package_name") ?: arg ?: ""
+                    val descriptor = extras?.getString("descriptor") ?: "LSPosed In-Process Hook"
+                    val action = extras?.getString("action") ?: "LSPOSED_BLOCKED"
+                    val platform = AdBlockerEngine.detectSocialPlatform(pkg) ?: SocialPlatform.OTHER_SOCIAL
+                    KernelRepository.getInstance(ctx).recordRealSocialAdIntercept(
+                        platform = platform,
+                        descriptor = descriptor,
+                        action = action
+                    )
+                } catch (_: Exception) {
+                }
+            }
+            "ping_lsposed_status" -> {
+                val detection = DragonXposedModule.detectContainerRuntime(ctx)
+                return Bundle().apply {
+                    putBoolean("ok", true)
+                    putBoolean("in_container", detection.isInContainer)
+                    putBoolean("self_hook_active", detection.isSelfHookActive)
+                    putString("container_type", detection.containerType.name)
+                    putInt("api_version", detection.apiVersion)
+                }
             }
         }
         return Bundle().apply { putBoolean("ok", true) }

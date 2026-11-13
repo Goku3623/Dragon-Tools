@@ -12,10 +12,13 @@ data class LSPosedEnvironmentInfo(
     val isFrameworkInstalled: Boolean = false,
     val isModuleHookedInApp: Boolean = false,
     val isModuleEnabledInLSPosed: Boolean = false,
+    val isRunningInLSPosedContainer: Boolean = false,
+    val containerType: LSPosedContainerType = LSPosedContainerType.NONE,
     val xposedApiVersion: Int = 0,
     val frameworkVariant: String = "Not Detected",
     val arePermissionsGranted: Boolean = false,
-    val configuredScopeCount: Int = 18
+    val isWorldReadablePrefsActive: Boolean = false,
+    val configuredScopeCount: Int = 22
 )
 
 object DragonLSPosedStatus {
@@ -52,33 +55,50 @@ object DragonLSPosedStatus {
     }
 
     suspend fun inspectLSPosedEnvironment(context: Context): LSPosedEnvironmentInfo = withContext(Dispatchers.IO) {
-        val hookedInProcess = try {
-            isModuleActiveHooked()
-        } catch (_: Throwable) {
-            false
-        }
-        val hookedApi = try {
-            getHookedApiVersion()
-        } catch (_: Throwable) {
-            0
-        }
+        val runtimeDetection = DragonXposedModule.detectContainerRuntime(context)
+        val hookedInProcess = runtimeDetection.isSelfHookActive || runtimeDetection.isXposedClassLoaderInjected
+        val hookedApi = runtimeDetection.apiVersion
+
+        val scopePackages = DragonXposedModule.getConfiguredScopePackages(context)
+        val scopeCount = if (scopePackages.isNotEmpty()) scopePackages.size else 22
 
         val managerInstalled = isLSPosedManagerInstalled(context)
-        var frameworkDetected = hookedInProcess || managerInstalled
-        var moduleEnabledInDb = hookedInProcess
-        var variant = if (hookedInProcess) "LSPosed Active (API $hookedApi)" else if (managerInstalled) "LSPosed Manager Installed" else "Not Detected"
-        var permsGranted = false
+        var frameworkDetected = runtimeDetection.isInContainer ||
+            runtimeDetection.isFrameworkFilesPresent ||
+            managerInstalled
+        var moduleEnabledInDb = runtimeDetection.isSelfHookActive ||
+            (runtimeDetection.isInContainer && runtimeDetection.isXposedClassLoaderInjected)
+        var variant = when {
+            runtimeDetection.isSelfHookActive -> "${runtimeDetection.details} (API $hookedApi)"
+            runtimeDetection.isInContainer -> "${runtimeDetection.containerType.label} (API ${if (hookedApi > 0) hookedApi else 93})"
+            managerInstalled -> "LSPosed Manager Installed (Enable Module)"
+            else -> "Not Detected"
+        }
+        var permsGranted = runtimeDetection.isWorldReadablePrefsSupported || hookedInProcess
 
         if (RootHelper.isRootAvailable) {
             val pkg = context.packageName
             val checkCmd = """
                 LSP_DIR=0
-                if [ -d /data/adb/lspd ] || [ -d /data/adb/modules/zygisk_lsposed ] || [ -d /data/adb/modules/riru_lsposed ]; then
+                LSP_VAR="none"
+                if [ -d /data/adb/modules/zygisk_lsposed ] || ls -d /data/adb/modules/*zygisk*lsposed* >/dev/null 2>&1; then
                     LSP_DIR=1
+                    LSP_VAR="zygisk"
+                elif [ -d /data/adb/modules/riru_lsposed ]; then
+                    LSP_DIR=1
+                    LSP_VAR="riru"
+                elif [ -d /data/adb/lspd ]; then
+                    LSP_DIR=1
+                    LSP_VAR="lspd"
                 fi
                 LSP_MOD=0
                 if [ -f /data/adb/lspd/config/modules_config.db ]; then
-                    if grep -q "$pkg" /data/adb/lspd/config/modules_config.db 2>/dev/null; then
+                    if command -v sqlite3 >/dev/null 2>&1; then
+                        EN=$(sqlite3 /data/adb/lspd/config/modules_config.db "SELECT enabled FROM modules WHERE module_pkg_name='$pkg' LIMIT 1;" 2>/dev/null || echo "")
+                        if [ "${'$'}EN" = "1" ]; then
+                            LSP_MOD=1
+                        fi
+                    elif grep -q "$pkg" /data/adb/lspd/config/modules_config.db 2>/dev/null; then
                         LSP_MOD=1
                     fi
                 fi
@@ -86,7 +106,7 @@ object DragonLSPosedStatus {
                 if [ -d /data/user/0/$pkg/shared_prefs ]; then
                     PREF_OK=1
                 fi
-                echo "D=${'$'}LSP_DIR|M=${'$'}LSP_MOD|P=${'$'}PREF_OK"
+                echo "D=${'$'}LSP_DIR|V=${'$'}LSP_VAR|M=${'$'}LSP_MOD|P=${'$'}PREF_OK"
             """.trimIndent()
 
             val out = RootHelper.executeCommand(checkCmd).output
@@ -96,41 +116,59 @@ object DragonLSPosedStatus {
 
             if (dMatch) {
                 frameworkDetected = true
-                if (!hookedInProcess) {
-                    variant = if (File("/data/adb/modules/zygisk_lsposed").exists()) {
-                        "Zygisk LSPosed Framework"
-                    } else {
-                        "LSPosed Framework (/data/adb/lspd)"
+                if (!runtimeDetection.isInContainer) {
+                    variant = when {
+                        out.contains("V=zygisk") || File("/data/adb/modules/zygisk_lsposed").exists() ->
+                            "Zygisk LSPosed Framework"
+                        out.contains("V=riru") ->
+                            "Riru LSPosed Framework"
+                        else ->
+                            "LSPosed Framework (/data/adb/lspd)"
                     }
                 }
             }
             if (mMatch) {
                 moduleEnabledInDb = true
             }
-            permsGranted = pMatch || hookedInProcess
+            permsGranted = permsGranted || pMatch
+        }
+
+        val resolvedContainerType = when {
+            runtimeDetection.containerType != LSPosedContainerType.NONE -> runtimeDetection.containerType
+            variant.contains("Zygisk", ignoreCase = true) && moduleEnabledInDb -> LSPosedContainerType.LSPOSED_ZYGISK
+            variant.contains("Riru", ignoreCase = true) && moduleEnabledInDb -> LSPosedContainerType.LSPOSED_RIRU
+            else -> LSPosedContainerType.NONE
         }
 
         LSPosedEnvironmentInfo(
             isFrameworkInstalled = frameworkDetected,
             isModuleHookedInApp = hookedInProcess,
             isModuleEnabledInLSPosed = moduleEnabledInDb,
+            isRunningInLSPosedContainer = runtimeDetection.isInContainer,
+            containerType = resolvedContainerType,
             xposedApiVersion = if (hookedApi > 0) hookedApi else if (frameworkDetected) 93 else 0,
             frameworkVariant = variant,
             arePermissionsGranted = permsGranted,
-            configuredScopeCount = 22
+            isWorldReadablePrefsActive = runtimeDetection.isWorldReadablePrefsSupported,
+            configuredScopeCount = scopeCount
         )
     }
 
     /**
      * Grants all required permissions for LSPosed cross-process hook communication:
-     * 1. Grants runtime & system permissions (QUERY_ALL_PACKAGES, INTERACT_ACROSS_USERS, WRITE_SECURE_SETTINGS).
-     * 2. Sets world-readable permissions (0755/0644) on app data & shared_prefs so XSharedPreferences in hooked apps can read configs.
-     * 3. Patches SELinux rules so hooked social media apps can query DragonLSPosedConfigProvider without binder denials.
-     * 4. Auto-enables module & social app scopes inside /data/adb/lspd/config/modules_config.db when sqlite3 is available.
+     * 1. Opens/migrates shared prefs into LSPosed world-readable store when active.
+     * 2. Grants runtime & system permissions (WRITE_SECURE_SETTINGS, PACKAGE_USAGE_STATS, INTERACT_ACROSS_USERS).
+     * 3. Sets world-readable permissions (0755/0644) on app data & shared_prefs so XSharedPreferences in hooked apps can read configs.
+     * 4. Patches SELinux rules so hooked social media apps can query DragonLSPosedConfigProvider without binder denials.
      */
     suspend fun grantLSPosedModulePermissions(context: Context): Boolean = withContext(Dispatchers.IO) {
+        // Ensure world-readable LSPosed prefs are initialized/migrated even if root isn't present
+        DragonXposedModule.openAdBlockerSharedPrefs(context)
+
         val pkg = context.packageName
-        if (!RootHelper.isRootAvailable) return@withContext false
+        if (!RootHelper.isRootAvailable) {
+            return@withContext DragonXposedModule.isInsideLSPosedContainer(context)
+        }
 
         val cmd = """
             pm grant $pkg android.permission.WRITE_SECURE_SETTINGS 2>/dev/null || true

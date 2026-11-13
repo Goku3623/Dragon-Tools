@@ -1059,9 +1059,12 @@ class VisualStyleManager(
 
     private fun startForegroundMonitorLoop() {
         scope.launch(Dispatchers.IO) {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
             while (true) {
-                delay(2500L)
-                if (!_foregroundAutoDetectEnabledFlow.value && !_miniFloatingEnabledFlow.value) continue
+                val active = _foregroundAutoDetectEnabledFlow.value || _miniFloatingEnabledFlow.value
+                val interactive = powerManager?.isInteractive ?: true
+                delay(if (active && interactive) 2500L else 6000L)
+                if (!active || !interactive) continue
                 if (!checkUsageStatsPermission()) continue
                 val fgPkg = queryForegroundPackage() ?: continue
                 withContext(Dispatchers.Main) {

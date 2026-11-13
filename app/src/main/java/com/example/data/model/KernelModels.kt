@@ -161,7 +161,7 @@ enum class BatteryProfile(
         minCpuFreqSilverKhz = 614400,
         maxCpuFreqSilverKhz = 2016000,
         minCpuFreqGoldKhz = 748800,
-        maxCpuFreqGoldKhz = 2800000,
+        maxCpuFreqGoldKhz = 2803200,
         minCpuFreqPrimeKhz = 844800,
         maxCpuFreqPrimeKhz = 3014400,
         minGpuFreqMhz = 250,
@@ -181,26 +181,26 @@ enum class BatteryProfile(
     ),
     AUTO(
         title = "Auto Smart",
-        description = "Intelligently balances POCO F6 power & thermals based on active foreground workload",
-        thermalLimitC = 41.0f,
-        socThermalLimitC = 78.0f,
-        gpuThermalLimitC = 75.0f,
-        minCpuFreqSilverKhz = 614400,
+        description = "Adaptive EAS/WALT sweet-spot: X4 2803 / A720 2572 / A520 2016 MHz, GPU 900 MHz, INDIA-DYNAMIC 42°C (SoC 86°C, GPU 82°C)",
+        thermalLimitC = 42.0f,
+        socThermalLimitC = 86.0f,
+        gpuThermalLimitC = 82.0f,
+        minCpuFreqSilverKhz = 844800,
         maxCpuFreqSilverKhz = 2016000,
-        minCpuFreqGoldKhz = 960000,
-        maxCpuFreqGoldKhz = 2496000,
-        minCpuFreqPrimeKhz = 960000,
+        minCpuFreqGoldKhz = 1152000,
+        maxCpuFreqGoldKhz = 2572800,
+        minCpuFreqPrimeKhz = 1267200,
         maxCpuFreqPrimeKhz = 2803200,
-        minGpuFreqMhz = 250,
+        minGpuFreqMhz = 345,
         maxGpuFreqMhz = 900,
         isUncapped = false,
         cpuBoostEnabled = true,
         inputBoostEnabled = true,
-        cpuBoostSilverKhz = 1651200,
-        cpuBoostGoldKhz = 2150400,
-        cpuBoostPrimeKhz = 2496000,
-        cpuBoostDurationMs = 85,
-        cpuBoostGpuThreshold = 45,
+        cpuBoostSilverKhz = 1766400,
+        cpuBoostGoldKhz = 2265600,
+        cpuBoostPrimeKhz = 2572800,
+        cpuBoostDurationMs = 110,
+        cpuBoostGpuThreshold = 35,
         gpuBoostEnabled = true,
         gpuBoostLevel = "DYNAMIC",
         adrenoBoostVal = 1,
@@ -208,26 +208,26 @@ enum class BatteryProfile(
     ),
     GAMING(
         title = "Dragon Gaming",
-        description = "POCO F6 SM8635 Throttleless Max Performance: Dynamic scaling up to 3014/2800/2016 MHz CPU & 1100 MHz GPU, every thermal limit removed, zero thermal throttling, ROM & kernel thermal throttles completely bypassed",
+        description = "INDIA-NOLIMITS Thermal: Unlocked 1324–2016 / 1824–2803 / 1900–3014 MHz WALT Beast & GPU 500–1100 MHz <54°C VIRTUAL-SENSOR0 for sustained FPS",
         thermalLimitC = 0.0f,
         socThermalLimitC = 0.0f,
         gpuThermalLimitC = 0.0f,
-        minCpuFreqSilverKhz = 1228800,
+        minCpuFreqSilverKhz = 1324800,
         maxCpuFreqSilverKhz = 2016000,
-        minCpuFreqGoldKhz = 1555200,
-        maxCpuFreqGoldKhz = 2800000,
-        minCpuFreqPrimeKhz = 1728000,
+        minCpuFreqGoldKhz = 1824000,
+        maxCpuFreqGoldKhz = 2803200,
+        minCpuFreqPrimeKhz = 1900800,
         maxCpuFreqPrimeKhz = 3014400,
-        minGpuFreqMhz = 400,
+        minGpuFreqMhz = 500,
         maxGpuFreqMhz = 1100,
         isUncapped = true,
         cpuBoostEnabled = true,
         inputBoostEnabled = true,
-        cpuBoostSilverKhz = 1651200,
-        cpuBoostGoldKhz = 2496000,
+        cpuBoostSilverKhz = 2016000,
+        cpuBoostGoldKhz = 2803200,
         cpuBoostPrimeKhz = 3014400,
-        cpuBoostDurationMs = 120,
-        cpuBoostGpuThreshold = 30,
+        cpuBoostDurationMs = 350,
+        cpuBoostGpuThreshold = 5,
         gpuBoostEnabled = true,
         gpuBoostLevel = "AGGRESSIVE",
         adrenoBoostVal = 3,
@@ -235,53 +235,53 @@ enum class BatteryProfile(
     ),
     PERFORMANCE(
         title = "Peak Performance",
-        description = "POCO F6 Exact Prime 2803 MHz, Gold 2496 MHz, Silver 2016 MHz, GPU 900 MHz, rock-solid stable sweet spot, 43°C limit (SoC 80°C, GPU 78°C)",
-        thermalLimitC = 43.0f,
-        socThermalLimitC = 80.0f,
-        gpuThermalLimitC = 78.0f,
-        minCpuFreqSilverKhz = 1228800,
+        description = "INDIA-TGAME Thermal: Sustained 2016/2803/3014 MHz CPU & 1000 MHz GPU <45°C VIRTUAL-SENSOR0, High-Floor WALT + LMH/BCL/CCC Curve 45–62°C",
+        thermalLimitC = 45.0f,
+        socThermalLimitC = 92.0f,
+        gpuThermalLimitC = 88.0f,
+        minCpuFreqSilverKhz = 1651200,
         maxCpuFreqSilverKhz = 2016000,
-        minCpuFreqGoldKhz = 1401600,
-        maxCpuFreqGoldKhz = 2496000,
-        minCpuFreqPrimeKhz = 1516800,
-        maxCpuFreqPrimeKhz = 2803200,
-        minGpuFreqMhz = 350,
-        maxGpuFreqMhz = 900,
+        minCpuFreqGoldKhz = 2361600,
+        maxCpuFreqGoldKhz = 2803200,
+        minCpuFreqPrimeKhz = 2668800,
+        maxCpuFreqPrimeKhz = 3014400,
+        minGpuFreqMhz = 500,
+        maxGpuFreqMhz = 1000,
         isUncapped = false,
         cpuBoostEnabled = true,
         inputBoostEnabled = true,
-        cpuBoostSilverKhz = 1497600,
-        cpuBoostGoldKhz = 2150400,
-        cpuBoostPrimeKhz = 2803200,
-        cpuBoostDurationMs = 90,
-        cpuBoostGpuThreshold = 40,
+        cpuBoostSilverKhz = 2016000,
+        cpuBoostGoldKhz = 2803200,
+        cpuBoostPrimeKhz = 3014400,
+        cpuBoostDurationMs = 200,
+        cpuBoostGpuThreshold = 15,
         gpuBoostEnabled = true,
-        gpuBoostLevel = "DYNAMIC",
+        gpuBoostLevel = "AGGRESSIVE",
         adrenoBoostVal = 2,
-        gpuPowerLevel = 1
+        gpuPowerLevel = 0
     ),
     BALANCED(
         title = "Balanced Daily",
-        description = "Prime 2496 MHz, Gold 2150 MHz, Silver 2016 MHz, GPU 750 MHz, smooth 120Hz daily boost, 40°C limit (SoC 75°C, GPU 72°C)",
-        thermalLimitC = 40.0f,
-        socThermalLimitC = 75.0f,
-        gpuThermalLimitC = 72.0f,
-        minCpuFreqSilverKhz = 960000,
-        maxCpuFreqSilverKhz = 2016000,
-        minCpuFreqGoldKhz = 1152000,
-        maxCpuFreqGoldKhz = 2150400,
-        minCpuFreqPrimeKhz = 1267200,
+        description = "Cool 120Hz daily sweet-spot: X4 2496 / A720 2361 / A520 1900 MHz, GPU 750 MHz, INDIA-BALANCED 41°C (SoC 84°C, GPU 79°C)",
+        thermalLimitC = 41.0f,
+        socThermalLimitC = 84.0f,
+        gpuThermalLimitC = 79.0f,
+        minCpuFreqSilverKhz = 729600,
+        maxCpuFreqSilverKhz = 1900800,
+        minCpuFreqGoldKhz = 960000,
+        maxCpuFreqGoldKhz = 2361600,
+        minCpuFreqPrimeKhz = 1075200,
         maxCpuFreqPrimeKhz = 2496000,
         minGpuFreqMhz = 250,
         maxGpuFreqMhz = 750,
         isUncapped = false,
         cpuBoostEnabled = true,
         inputBoostEnabled = true,
-        cpuBoostSilverKhz = 1228800,
-        cpuBoostGoldKhz = 1785600,
+        cpuBoostSilverKhz = 1555200,
+        cpuBoostGoldKhz = 1958400,
         cpuBoostPrimeKhz = 2188800,
-        cpuBoostDurationMs = 50,
-        cpuBoostGpuThreshold = 55,
+        cpuBoostDurationMs = 75,
+        cpuBoostGpuThreshold = 45,
         gpuBoostEnabled = true,
         gpuBoostLevel = "DYNAMIC",
         adrenoBoostVal = 1,
@@ -289,31 +289,90 @@ enum class BatteryProfile(
     ),
     POWER_SAVING(
         title = "Extreme Battery Saver",
-        description = "Prime 1728 MHz, Gold 1958 MHz, Silver 1843 MHz, GPU 600 MHz, boosts off, 38°C limit (SoC 68°C, GPU 65°C)",
-        thermalLimitC = 38.0f,
-        socThermalLimitC = 68.0f,
-        gpuThermalLimitC = 65.0f,
+        description = "Ultra-low V/F leakage: X4 1843 / A720 1843 / A520 1651 MHz, GPU 500 MHz, INDIA-COOL 39°C (SoC 76°C, GPU 74°C)",
+        thermalLimitC = 39.0f,
+        socThermalLimitC = 76.0f,
+        gpuThermalLimitC = 74.0f,
         minCpuFreqSilverKhz = 614400,
-        maxCpuFreqSilverKhz = 1843200,
+        maxCpuFreqSilverKhz = 1651200,
         minCpuFreqGoldKhz = 748800,
-        maxCpuFreqGoldKhz = 1958400,
+        maxCpuFreqGoldKhz = 1843200,
         minCpuFreqPrimeKhz = 844800,
-        maxCpuFreqPrimeKhz = 1728000,
+        maxCpuFreqPrimeKhz = 1843200,
         minGpuFreqMhz = 250,
-        maxGpuFreqMhz = 600,
+        maxGpuFreqMhz = 500,
         isUncapped = false,
         cpuBoostEnabled = false,
         inputBoostEnabled = false,
-        cpuBoostSilverKhz = 1228800,
-        cpuBoostGoldKhz = 1555200,
-        cpuBoostPrimeKhz = 1267200,
+        cpuBoostSilverKhz = 1190400,
+        cpuBoostGoldKhz = 1497600,
+        cpuBoostPrimeKhz = 1497600,
         cpuBoostDurationMs = 0,
         cpuBoostGpuThreshold = 85,
         gpuBoostEnabled = false,
         gpuBoostLevel = "LOW",
         adrenoBoostVal = 0,
         gpuPowerLevel = 3
-    )
+    );
+
+    val primeSummaryMhz: String
+        get() = "${minCpuFreqPrimeKhz / 1000}–${maxCpuFreqPrimeKhz / 1000} MHz"
+
+    val goldSummaryMhz: String
+        get() = "${minCpuFreqGoldKhz / 1000}–${maxCpuFreqGoldKhz / 1000} MHz"
+
+    val silverSummaryMhz: String
+        get() = "${minCpuFreqSilverKhz / 1000}–${maxCpuFreqSilverKhz / 1000} MHz"
+
+    val gpuSummaryMhz: String
+        get() = "${minGpuFreqMhz}–${maxGpuFreqMhz} MHz"
+
+    val compactThermalBadge: String
+        get() = when (this) {
+            DEFAULT -> "NATIVE AOSP"
+            GAMING -> "NOLIMITS 54–62°C"
+            PERFORMANCE -> "TGAME 45–62°C"
+            AUTO -> "DYNAMIC ${thermalLimitC.toInt()}°C"
+            BALANCED -> "BALANCED ${thermalLimitC.toInt()}°C"
+            POWER_SAVING -> "COOL ${thermalLimitC.toInt()}°C"
+        }
+
+    val compactSpecLine: String
+        get() = when (this) {
+            DEFAULT -> "X4 3014 • A720 2803 • A520 2016 • GPU 950 MHz"
+            GAMING -> "X4 1900–3014 • A720 1824–2803 • A520 1324–2016 • GPU 1100 MHz"
+            else -> "X4 ${maxCpuFreqPrimeKhz / 1000} • A720 ${maxCpuFreqGoldKhz / 1000} • A520 ${maxCpuFreqSilverKhz / 1000} • GPU ${maxGpuFreqMhz} MHz"
+        }
+
+    val compactModeLine: String
+        get() = when (this) {
+            DEFAULT -> "ROM power-libperfmgr • Native thermal engine passthrough"
+            GAMING -> "Dynamic Gaming Beast WALT (1.5s hold) • GPU 500–1100 • Sustained FPS"
+            PERFORMANCE -> "Floor 2668/2361/1651 • GPU 500–1000 • High-Floor WALT + LMH"
+            AUTO -> "Floor 1267/1152/844 • GPU 345–900 • Adaptive EAS (SoC 86°C)"
+            BALANCED -> "Floor 1075/960/729 • GPU 250–750 • 120Hz Daily (SoC 84°C)"
+            POWER_SAVING -> "Floor 844/748/614 • GPU 250–500 • Low-V/F Saver (SoC 76°C)"
+        }
+
+    val uclampSummary: String
+        get() = when (this) {
+            DEFAULT -> "ROM Native (power-libperfmgr)"
+            AUTO -> "Top: 12–100% • FG: 4% • EAS + WALT"
+            GAMING -> "Top: 30–100% Latency+ • FG: 15% • Beast WALT (1.5s hold) + 90% Bus"
+            PERFORMANCE -> "Top: 22–100% • FG: 8% • High-Floor WALT + EAS + BusLock"
+            BALANCED -> "Top: 8–100% • FG: 0% • EAS + WALT"
+            POWER_SAVING -> "Top: 4–90% • Boosts OFF"
+        }
+
+    val thermalSummary: String
+        get() = when (this) {
+            DEFAULT -> "ROM Native Thermal Engine"
+            GAMING -> "INDIA-NOLIMITS (54–62°C Virtual Sensor)"
+            PERFORMANCE -> "INDIA-TGAME (45–62°C Virtual Sensor)"
+            AUTO -> "INDIA-DYNAMIC (BAT ${thermalLimitC.toInt()}°C • SoC ${socThermalLimitC.toInt()}°C • GPU ${gpuThermalLimitC.toInt()}°C)"
+            BALANCED -> "INDIA-BALANCED (BAT ${thermalLimitC.toInt()}°C • SoC ${socThermalLimitC.toInt()}°C • GPU ${gpuThermalLimitC.toInt()}°C)"
+            POWER_SAVING -> "INDIA-COOL (BAT ${thermalLimitC.toInt()}°C • SoC ${socThermalLimitC.toInt()}°C • GPU ${gpuThermalLimitC.toInt()}°C)"
+        }
 }
 
 data class CustomBatteryProfile(
@@ -327,13 +386,48 @@ data class CustomBatteryProfile(
     val silverMinFreqKhz: Int = 614400,
     val silverMaxFreqKhz: Int = 2016000,
     val goldMinFreqKhz: Int = 748800,
-    val goldMaxFreqKhz: Int = 2800000,
+    val goldMaxFreqKhz: Int = 2803200,
     val primeMinFreqKhz: Int = 844800,
     val primeMaxFreqKhz: Int = 3014400,
     // Granular GPU lowest (min 250 MHz) and highest clock speeds
     val gpuMinFreqMhz: Int = 250,
     val gpuMaxFreqMhz: Int = 1100,
-    val governor: String = "schedutil"
+    val governor: String = "walt",
+    // Detailed GPU, Boost, WALT, uclamp, Bus & Thermal options
+    val gpuGovernor: String = "msm-adreno-tz",
+    val adrenoBoostVal: Int = 1,
+    val gpuPowerLevel: Int = 1,
+    val cpuBoostEnabled: Boolean = true,
+    val inputBoostEnabled: Boolean = true,
+    val cpuBoostDurationMs: Int = 100,
+    val cpuBoostGpuThreshold: Int = 40,
+    val waltDownRateLimitUs: Int = 500000,
+    val uclampTopMinPct: Int = 15,
+    val uclampTopMaxPct: Int = 100,
+    val latencySensitive: Boolean = false,
+    val busScaleMode: String = "DYNAMIC", // DYNAMIC, RESPONSIVE_75, HIGH_90
+    val suppressRomThermal: Boolean = true
+)
+
+data class AppBatteryProfileRule(
+    val packageName: String,
+    val appName: String,
+    val profile: BatteryProfile,
+    val customProfileId: String? = null,
+    val refreshRateHz: Int = 120, // 60, 90, 120 Hz per-app display refresh rate on POCO F6
+    val enableBypassCharging: Boolean = false, // Auto-enable Direct Motherboard USB Bypass while app is in foreground
+    val clearRamOnLaunch: Boolean = false // Drop pagecache/dentries on app launch for max free LPDDR5X RAM
+)
+
+data class PerAppProfileConfig(
+    val isEnabled: Boolean = true,
+    val fallbackProfile: BatteryProfile = BatteryProfile.DEFAULT,
+    val fallbackCustomProfileId: String? = null,
+    val activeForegroundPackage: String = "",
+    val activeForegroundAppName: String = "System / Launcher",
+    val activeEnforcedProfileTitle: String = "ROM's Default",
+    val isPerAppOverrideActive: Boolean = false,
+    val rules: List<AppBatteryProfileRule> = emptyList()
 )
 
 enum class ChargingSpeedMode(
@@ -420,6 +514,7 @@ enum class CurrentLimiterThermalMode(
 }
 
 data class ChargingControls(
+    val chargingPresetsEnabled: Boolean = false, // Master ON/OFF toggle for Charging Speed Presets (OFF = ROM Default Speed)
     val speedMode: ChargingSpeedMode = ChargingSpeedMode.HYPERCHARGE_90W,
     val bypassCharging: Boolean = false, // Powers device directly, stops battery charge
     val manualCurrentLimiterEnabled: Boolean = false,
@@ -438,16 +533,22 @@ data class ChargingControls(
     val lockSysfsNodesReadOnly: Boolean = true, // Locks constant_charge_current_max (chmod 0444) so ROM cannot reset it
     val overrideRomThermalDaemon: Boolean = true, // Overrides mi_thermald / system_temp_level
     val forcePmicVoterOverride: Boolean = true, // Forces Qualcomm PMIC FCC & USB_ICL hardware votables
-    val activeOverrideStatus: String = "Active Preset: HyperCharge 90W (20,000 mA / 90W Max)",
-    val lastRootOverrideCommand: String = "/sys/class/power_supply/battery/constant_charge_current_max",
+    val activeOverrideStatus: String = "Charging Presets OFF • ROM Default Inbuilt Charging Speed & Thermal Active",
+    val lastRootOverrideCommand: String = "ROM_DEFAULT_PASSTHROUGH",
     val bypassHardwareVerified: Boolean = false,
     val bypassStatusText: String = "Standby • Normal Battery Charging",
     val thermalBypassStatus: String = "Standby • ROM Default Thermal Throttling Active",
     val lastThermalBypassCommand: String = "/sys/class/power_supply/battery/system_temp_level & cooling_deviceX/cur_state"
 )
 
+enum class FpsOverlayStyle {
+    FULL_METER,
+    MINI_PILL
+}
+
 data class FpsOverlayConfig(
     val isEnabled: Boolean = false,
+    val overlayStyle: FpsOverlayStyle = FpsOverlayStyle.FULL_METER,
     val showFps: Boolean = true,
     val showForegroundApp: Boolean = true,
     val showFrameTimeMs: Boolean = true,
@@ -531,96 +632,7 @@ data class FpsRecorderConfig(
     val liveStabilityPercent: Int = 98,
     val liveJankCount: Int = 0,
     val liveHardwareSourceStatus: String = "SurfaceFlinger Per-App Layer Latency + PageFlip",
-    val recordedSessions: List<FpsRecordedSession> = listOf(
-        FpsRecordedSession(
-            id = "fps_session_1",
-            appName = "System Launcher / Game Session",
-            packageName = "com.miHoYo.GenshinImpact",
-            timestamp = System.currentTimeMillis() - 600_000L,
-            durationSec = 6,
-            captureSource = "SurfaceFlinger Layer + PageFlip",
-            samplingIntervalMs = 250,
-            avgFps = 51.1f,
-            minFps = 0.0f,
-            maxFps = 119.9f,
-            varianceFps = 1669.6f,
-            relativeSmoothness = 0.0f,
-            fivePercentLowFps = 0.0f,
-            onePercentLowFps = 14,
-            pointOnePercentLowFps = 0,
-            avgFrameTimeMs = 19.56f,
-            stabilityPercent = 82,
-            jankFrameCount = 4,
-            peakCpuTempC = 44.0f,
-            peakBatteryTempC = 35.0f,
-            avgGpuLoadPercent = 16,
-            avgPowerWatt = 0.4f,
-            resolution = "1220x2712(?)",
-            fpsSamples = listOf(0, 65, 119, 72, 72, 42, 18, 6, 38, 72),
-            fpsFloatSamples = listOf(0f, 65.2f, 119.9f, 72.0f, 72.0f, 41.5f, 18.2f, 5.8f, 38.4f, 72.0f),
-            frametimeSamples = listOf(14f, 12f, 8.3f, 13.8f, 13.8f, 28f, 52f, 217f, 112f, 14f),
-            cpuTempSamples = listOf(45f, 45f, 46f, 47f, 46f, 44f, 43f, 43f, 44f, 44f),
-            cpuCluster0UsageSamples = listOf(80, 82, 84, 80, 82, 74, 65, 51, 66, 80),
-            cpuCluster3UsageSamples = listOf(8, 17, 27, 25, 9, 10, 11, 11, 13, 15),
-            cpuTotalUsageSamples = listOf(35, 40, 45, 45, 36, 33, 30, 26, 31, 38),
-            cpuCluster0FreqSamples = listOf(1690, 1520, 1350, 1901, 1480, 1120, 1901, 1450, 1120, 1120),
-            cpuCluster3FreqSamples = listOf(1280, 1340, 1400, 1840, 1320, 780, 780, 780, 780, 780),
-            cpuCluster7FreqSamples = listOf(1220, 1220, 1220, 1220, 1220, 1220, 1220, 1220, 1220, 1220),
-            gpuFreqSamples = listOf(255, 580, 900, 500, 500, 380, 255, 255, 370, 500),
-            gpuLoadSamples = listOf(0, 5, 9, 16, 9, 3, 3, 2, 0, 3),
-            gpuTempSamples = listOf(45f, 45.5f, 46f, 47f, 46.5f, 45f, 42f, 41.5f, 42f, 43f),
-            appRamUsageMbSamples = listOf(245, 247, 249, 249, 248, 248, 248, 248, 248, 248),
-            deviceRamUsedMbSamples = listOf(4300, 4310, 4319, 4315, 4305, 4298, 4302, 4310, 4308, 4304),
-            deviceSwapUsedMbSamples = listOf(2020, 2020, 2020, 2020, 2020, 2020, 2020, 2020, 2020, 2020),
-            powerWattSamples = listOf(0.12f, 0.55f, 1.0f, 1.0f, 0.65f, 0.34f, 0.14f, 0.08f, 0.10f, 0.14f),
-            batteryTempSamples = listOf(35f, 35f, 35f, 35f, 35f, 35f, 35f, 35f, 35f, 35f),
-            batteryLevelSamples = listOf(100, 100, 100, 100, 100, 100, 100, 100, 100, 100)
-        ),
-        FpsRecordedSession(
-            id = "fps_session_2",
-            appName = "Wuthering Waves",
-            packageName = "com.kurogame.wutheringwaves.global",
-            timestamp = System.currentTimeMillis() - 5400_000L,
-            durationSec = 180,
-            captureSource = "SurfaceFlinger PageFlip",
-            samplingIntervalMs = 250,
-            avgFps = 116.8f,
-            minFps = 98.0f,
-            maxFps = 120.0f,
-            varianceFps = 28.4f,
-            relativeSmoothness = 94.8f,
-            fivePercentLowFps = 104.0f,
-            onePercentLowFps = 104,
-            pointOnePercentLowFps = 99,
-            avgFrameTimeMs = 8.56f,
-            stabilityPercent = 95,
-            jankFrameCount = 6,
-            peakCpuTempC = 43.1f,
-            peakBatteryTempC = 38.4f,
-            avgGpuLoadPercent = 89,
-            avgPowerWatt = 4.6f,
-            resolution = "1220x2712(?)",
-            fpsSamples = listOf(118, 117, 115, 120, 112, 116, 118, 119, 114, 117, 120, 116),
-            fpsFloatSamples = listOf(118f, 117f, 115f, 120f, 112f, 116f, 118f, 119f, 114f, 117f, 120f, 116f),
-            frametimeSamples = listOf(8.5f, 8.6f, 8.7f, 8.3f, 8.9f, 8.6f, 8.5f, 8.4f, 8.8f, 8.5f, 8.3f, 8.6f),
-            cpuTempSamples = listOf(41f, 41.5f, 42f, 42.4f, 43.1f, 42.8f, 42.5f, 42.2f, 42.9f, 43.0f, 42.7f, 42.6f),
-            cpuCluster0UsageSamples = listOf(64, 68, 72, 70, 75, 71, 69, 67, 74, 72, 68, 70),
-            cpuCluster3UsageSamples = listOf(52, 58, 61, 55, 66, 60, 57, 54, 63, 59, 56, 58),
-            cpuTotalUsageSamples = listOf(58, 63, 66, 62, 70, 65, 63, 60, 68, 65, 62, 64),
-            cpuCluster0FreqSamples = listOf(1843, 1843, 1958, 1958, 1958, 1843, 1843, 1843, 1958, 1843, 1843, 1843),
-            cpuCluster3FreqSamples = listOf(2150, 2150, 2496, 2150, 2496, 2150, 2150, 2150, 2496, 2150, 2150, 2150),
-            cpuCluster7FreqSamples = listOf(2496, 2496, 2803, 2496, 2803, 2496, 2496, 2496, 2803, 2496, 2496, 2496),
-            gpuFreqSamples = listOf(750, 800, 850, 800, 900, 850, 800, 750, 850, 800, 750, 800),
-            gpuLoadSamples = listOf(84, 88, 91, 86, 94, 89, 87, 85, 92, 88, 86, 89),
-            gpuTempSamples = listOf(40f, 41f, 42f, 41.5f, 43f, 42.5f, 42f, 41.5f, 42.8f, 42.2f, 41.8f, 42.0f),
-            appRamUsageMbSamples = listOf(1840, 1865, 1890, 1910, 1925, 1930, 1935, 1940, 1945, 1950, 1948, 1952),
-            deviceRamUsedMbSamples = listOf(6420, 6480, 6510, 6540, 6590, 6580, 6570, 6590, 6610, 6600, 6595, 6605),
-            deviceSwapUsedMbSamples = listOf(2140, 2140, 2150, 2150, 2160, 2160, 2160, 2160, 2165, 2165, 2165, 2165),
-            powerWattSamples = listOf(4.2f, 4.5f, 4.8f, 4.4f, 5.1f, 4.7f, 4.5f, 4.3f, 4.9f, 4.6f, 4.4f, 4.5f),
-            batteryTempSamples = listOf(37.5f, 37.6f, 37.8f, 37.9f, 38.1f, 38.2f, 38.2f, 38.3f, 38.4f, 38.4f, 38.4f, 38.4f),
-            batteryLevelSamples = listOf(94, 94, 94, 93, 93, 93, 93, 92, 92, 92, 92, 92)
-        )
-    ),
+    val recordedSessions: List<FpsRecordedSession> = emptyList(),
     val lastActionFeedback: String? = null
 )
 
@@ -687,38 +699,38 @@ enum class ThermalThrottlingPolicy(
     PROGRESSIVE_OPP_STEP(
         label = "Progressive OPP Step-Down",
         shortTitle = "Progressive",
-        description = "Smooth 3-stage POCO F6 hardware OPP step-down (-10% at limit, -20% at +1°C, -32% at +2.5°C) for zero-stutter FPS stability.",
+        description = "Smooth 3-stage POCO F6 hardware OPP step-down (-8% at limit, -16% at +1°C, -26% at +2.5°C) for zero-stutter FPS stability.",
         triggerOffsetDeciC = 0,
-        stage1DropPct = 10,
-        stage2DropPct = 20,
-        stage3DropPct = 32
+        stage1DropPct = 8,
+        stage2DropPct = 16,
+        stage3DropPct = 26
     ),
     AGGRESSIVE_HOLD(
         label = "Aggressive Performance Hold",
         shortTitle = "Aggressive Hold",
-        description = "Holds 100% profile clocks up to Limit + 0.5°C, then applies a minimal -8% OPP step-down to maximize sustained gaming FPS.",
+        description = "Holds 100% profile clocks up to Limit + 0.5°C, then applies a minimal -6% OPP step-down to maximize sustained gaming FPS.",
         triggerOffsetDeciC = 5,
-        stage1DropPct = 8,
-        stage2DropPct = 16,
-        stage3DropPct = 28
+        stage1DropPct = 6,
+        stage2DropPct = 12,
+        stage3DropPct = 22
     ),
     STRICT_CEILING_CLAMP(
         label = "Strict Ceiling Clamp",
         shortTitle = "Strict Clamp",
-        description = "Immediately clamps CPU & GPU clocks by -18% as soon as temperature reaches the target limit and holds until cooled.",
+        description = "Immediately clamps CPU & GPU clocks by -14% as soon as temperature reaches the target limit and holds until cooled.",
         triggerOffsetDeciC = 0,
-        stage1DropPct = 18,
-        stage2DropPct = 28,
-        stage3DropPct = 40
+        stage1DropPct = 14,
+        stage2DropPct = 24,
+        stage3DropPct = 34
     ),
     COOL_CONSERVATIVE(
         label = "Cool & Conservative",
         shortTitle = "Cool First",
-        description = "Pre-emptively steps down clocks by -12% at Limit - 0.5°C to keep chassis and battery cool during extended sessions.",
+        description = "Pre-emptively steps down clocks by -10% at Limit - 0.5°C to keep chassis and battery cool during extended sessions.",
         triggerOffsetDeciC = -5,
-        stage1DropPct = 12,
-        stage2DropPct = 24,
-        stage3DropPct = 36
+        stage1DropPct = 10,
+        stage2DropPct = 20,
+        stage3DropPct = 30
     );
     val title: String get() = label
 }
@@ -731,12 +743,12 @@ enum class ThermalSensorSource(
     BATTERY_SENSOR(
         label = "Battery Temperature Sensor (/sys/class/power_supply/battery/temp)",
         shortTitle = "Battery Temp",
-        description = "Tracks hardware battery/chassis temperature directly against the 38°C–45°C profile limit."
+        description = "Tracks hardware battery/chassis temperature directly against the 38°C–48°C profile limit without reacting to brief CPU bursts."
     ),
     SMART_DUAL_SENSOR(
-        label = "Smart Dual Sensor (Battery Temp + SoC CPU/GPU Peak Guard)",
+        label = "Debounced Dual Sensor (Battery + Sustained SoC/GPU Guard)",
         shortTitle = "Dual Batt + SoC",
-        description = "Tracks battery temp against the profile limit AND guards Snapdragon 8s Gen 3 SoC junction temp (88°C+)."
+        description = "Tracks battery temp plus sustained SoC/GPU heat soak (3+ samples debounced to prevent burst sawtooth drops while guarding silicon thermals)."
     );
     val title: String get() = shortTitle
 }
@@ -751,6 +763,7 @@ data class ThermalControlConfig(
     val controlCpuFreqQos: Boolean = true,
     val controlGpuPwrLevel: Boolean = true,
     val suppressPrematureRomThrottle: Boolean = true,
+    val backgroundThermalShedding: Boolean = true,
     val isRomDefaultPassthrough: Boolean = true,
     val currentThrottleStage: Int = 0, // 0 = Unthrottled, 1 = Stage 1 (-1 OPP), 2 = Stage 2 (-2 OPPs), 3 = Stage 3 (Cooldown Guard)
     val currentThrottleStatus: String = "ROM Native Thermal Control Active (Free from App Control)",
@@ -760,8 +773,10 @@ data class ThermalControlConfig(
     val enforcedGpuMaxMhz: Int = 950,
     val activeEffectiveSocLimitC: Float = 85.0f,
     val activeEffectiveGpuLimitC: Float = 82.0f,
+    val liveBatteryTempC: Float = 34.0f,
     val liveSocTempC: Float = 41.0f,
-    val liveGpuTempC: Float = 38.0f
+    val liveGpuTempC: Float = 38.0f,
+    val liveVirtualTempC: Float = 40.0f
 )
 
 data class AppManagerItem(
@@ -807,6 +822,11 @@ enum class SurfaceThemeMode(
         title = "iOS Liquid Glass (Frosted Ice)",
         subtitle = "Translucent frosted ice crystal glass with sub-zero glacial refraction",
         hexCode = "#081426"
+    ),
+    MATERIAL_3(
+        title = "Material 3 Expressive UI",
+        subtitle = "Eye-soothing M3 tonal containers, calm low-glare contrast & Material You harmony",
+        hexCode = "#13161B"
     )
 }
 
@@ -823,7 +843,7 @@ enum class GamingThemePreset(
 ) {
     ROG_CRIMSON(
         title = "ROG Crimson Core",
-        badge = "DEFAULT HUD",
+        badge = "GAMING HUD",
         description = "Dragon Red & Neon Cyan over Obsidian Carbon",
         primaryAccentIndex = 0,
         secondaryAccentIndex = 1,
@@ -831,6 +851,17 @@ enum class GamingThemePreset(
         borderGlow = 0.65f,
         headerGlow = 0.25f,
         cornerRadiusDp = 18
+    ),
+    MATERIAL_3_EXPRESSIVE(
+        title = "Material 3 You",
+        badge = "DEFAULT M3",
+        description = "Eye-soothing M3 tonal surfaces, soft pastel accents & calm 22dp geometry",
+        primaryAccentIndex = 10,
+        secondaryAccentIndex = 11,
+        surfaceMode = SurfaceThemeMode.MATERIAL_3,
+        borderGlow = 0.22f,
+        headerGlow = 0.10f,
+        cornerRadiusDp = 22
     ),
     IOS_LIQUID_GLASS(
         title = "iOS Liquid Glass",
@@ -916,13 +947,17 @@ enum class NotificationPanelStyle(
     val title: String,
     val description: String
 ) {
+    MATERIAL_3_UI(
+        title = "Material 3 UI Style",
+        description = "Calm M3 tonal cards, soft rounded pill buttons & eye-soothing surface elevation."
+    ),
     STOCK_SIMPLE(
         title = "Stock Default (Simple)",
         description = "Clean, minimal stock Android notification formatting with default system colors."
     ),
     DYNAMIC_THEME_GLOW(
         title = "App's Theme Color (Dynamic Glow)",
-        description = "Beautiful notification panel UI styled dynamically with app's active primary theme colors & glowing badges."
+        description = "Notification panel UI styled dynamically with active primary theme colors & badges."
     ),
     IOS_LIQUID_GLASS_COMPACT(
         title = "iOS Liquid Glass (Compact)",
@@ -931,23 +966,23 @@ enum class NotificationPanelStyle(
 }
 
 data class ThemeCustomizationConfig(
-    val primaryAccentIndex: Int = 0,
-    val secondaryAccentIndex: Int = 1,
-    val surfaceMode: SurfaceThemeMode = SurfaceThemeMode.OBSIDIAN_CARBON,
-    val notificationPanelStyle: NotificationPanelStyle = NotificationPanelStyle.STOCK_SIMPLE,
+    val primaryAccentIndex: Int = 10,
+    val secondaryAccentIndex: Int = 11,
+    val surfaceMode: SurfaceThemeMode = SurfaceThemeMode.MATERIAL_3,
+    val notificationPanelStyle: NotificationPanelStyle = NotificationPanelStyle.MATERIAL_3_UI,
     val useCustomPrimaryColor: Boolean = false,
-    val customRed: Int = 255,
-    val customGreen: Int = 42,
-    val customBlue: Int = 75,
-    val borderGlowIntensity: Float = 0.65f, // 0.15f .. 1.0f
-    val headerGlowIntensity: Float = 0.25f, // 0.05f .. 0.50f
-    val cornerRadiusDp: Int = 18, // 8, 14, 18, 24
+    val customRed: Int = 155,
+    val customGreen: Int = 189,
+    val customBlue: Int = 249,
+    val borderGlowIntensity: Float = 0.22f, // 0.15f .. 1.0f
+    val headerGlowIntensity: Float = 0.10f, // 0.05f .. 0.50f
+    val cornerRadiusDp: Int = 22, // 8, 14, 18, 22, 24
     val useDynamicColor: Boolean = false,
     val isLiquidGlassEnabled: Boolean = false,
     val liquidGlassOpacity: Float = 0.28f, // 0.12f .. 0.65f
     val liquidGlassRefraction: Float = 0.85f, // 0.20f .. 1.0f
     val liquidGlassWallpaperTint: String = "Frosted Ice", // Frosted Ice, Glacial Cyan, Polar Aurora, Deep Permafrost, Diamond Frost
-    val activePresetName: String = "ROG Crimson Core",
+    val activePresetName: String = "Material 3 You",
     val savedCustomPalettes: List<CustomColorPalette> = listOf(
         CustomColorPalette(
             id = "pal_cyber_neon",
@@ -1219,7 +1254,7 @@ data class FrameGenConfig(
     val intensity: Float = 0.80f, // 0.10f .. 1.00f
     val targetFps: Int = 120, // 60, 90, 120, 144
     val autoGpuCompatibilityDetection: Boolean = true,
-    val autoActivateForGames: Boolean = true,
+    val autoActivateForGames: Boolean = false,
     val autoShowFloatingWindow: Boolean = true,
     val floatingStyle: FrameGenFloatingStyle = FrameGenFloatingStyle.TACTICAL_HUD_CARD,
     val floatingSize: FrameGenFloatingSize = FrameGenFloatingSize.MEDIUM,

@@ -31,8 +31,10 @@ val GAMING_ACCENT_OPTIONS = listOf(
     GamingAccentOption("Plasma Pink", PlasmaPink, "#FF1770", "Cyber Magenta"),
     GamingAccentOption("Cobalt Laser", CyberBlue, "#2979FF", "Adreno Blue"),
     GamingAccentOption("Solar Lava", SolarLava, "#FF5722", "Magma Orange"),
-    GamingAccentOption("Arctic Mint", ArcticMint, "#1DE9B6", "Liquid Cryo"),
-    GamingAccentOption("Titanium Frost", TitaniumFrost, "#E2E8F0", "Stealth Silver")
+    GamingAccentOption("Arctic Mint", ArcticMint, "#63D2BE", "Liquid Cryo"),
+    GamingAccentOption("Titanium Frost", TitaniumFrost, "#D5DCE6", "Stealth Silver"),
+    GamingAccentOption("M3 Periwinkle", M3SoftBlue, "#9BBDF9", "Material You"),
+    GamingAccentOption("M3 Sage Mint", M3SoftSage, "#8CD3AC", "Calm Tonal")
 )
 
 // Backward-compatible pair list for any callers expecting (Name, Color)
@@ -48,8 +50,8 @@ fun DragonKernelTheme(
     content: @Composable () -> Unit
 ) {
     val resolvedConfig = themeConfig ?: ThemeCustomizationConfig(
-        primaryAccentIndex = accentIndex,
-        surfaceMode = if (isAmoledBlack) SurfaceThemeMode.OBSIDIAN_CARBON else SurfaceThemeMode.CYBER_SLATE
+        primaryAccentIndex = if (accentIndex == 0) 10 else accentIndex,
+        surfaceMode = if (isAmoledBlack) SurfaceThemeMode.MATERIAL_3 else SurfaceThemeMode.CYBER_SLATE
     )
 
     val activeAccent = if (resolvedConfig.useCustomPrimaryColor) {
@@ -59,15 +61,17 @@ fun DragonKernelTheme(
             blue = resolvedConfig.customBlue.coerceIn(0, 255) / 255f
         )
     } else {
-        GAMING_ACCENT_OPTIONS.getOrElse(resolvedConfig.primaryAccentIndex) { GAMING_ACCENT_OPTIONS[0] }.color
+        GAMING_ACCENT_OPTIONS.getOrElse(resolvedConfig.primaryAccentIndex) { GAMING_ACCENT_OPTIONS[10] }.color
     }
 
     val secondaryAccent = GAMING_ACCENT_OPTIONS
-        .getOrElse(resolvedConfig.secondaryAccentIndex) { GAMING_ACCENT_OPTIONS[1] }
+        .getOrElse(resolvedConfig.secondaryAccentIndex) { GAMING_ACCENT_OPTIONS[11] }
         .color
 
     val isLiquidGlassActive = resolvedConfig.isLiquidGlassEnabled ||
             resolvedConfig.surfaceMode == SurfaceThemeMode.IOS_LIQUID_GLASS
+    val isMaterial3Active = !isLiquidGlassActive &&
+            resolvedConfig.surfaceMode == SurfaceThemeMode.MATERIAL_3
     val glassAlpha = resolvedConfig.liquidGlassOpacity.coerceIn(0.12f, 0.65f)
     val refraction = resolvedConfig.liquidGlassRefraction.coerceIn(0.20f, 1.0f)
 
@@ -87,6 +91,12 @@ fun DragonKernelTheme(
                 Color(0xFFE0F7FF).copy(alpha = (0.50f * refraction).coerceIn(0.24f, 0.78f))
             )
         }
+        isMaterial3Active -> listOf(
+            Material3Bg,
+            Material3Surface,
+            Material3SurfaceVariant,
+            Material3Border
+        )
         resolvedConfig.surfaceMode == SurfaceThemeMode.TRUE_AMOLED_PITCH -> listOf(
             PitchAmoledBg,
             PitchAmoledSurface,
@@ -130,51 +140,88 @@ fun DragonKernelTheme(
     val effectiveSecondary = baseDynamicScheme?.secondary ?: secondaryAccent
     val glowAlpha = resolvedConfig.borderGlowIntensity.coerceIn(0.15f, 1.0f)
 
-    val outlineVariantColor = if (isLiquidGlassActive) {
-        Color(0xFFE0F7FF).copy(alpha = (0.46f * refraction).coerceIn(0.22f, 0.75f))
-    } else {
-        effectivePrimary.copy(alpha = (glowAlpha * 0.45f).coerceIn(0.15f, 0.65f))
+    val outlineVariantColor = when {
+        isLiquidGlassActive -> Color(0xFFE0F7FF).copy(alpha = (0.46f * refraction).coerceIn(0.22f, 0.75f))
+        isMaterial3Active && baseDynamicScheme != null -> baseDynamicScheme.outlineVariant.copy(alpha = 0.65f)
+        isMaterial3Active -> Material3Border.copy(alpha = 0.45f)
+        else -> effectivePrimary.copy(alpha = (glowAlpha * 0.45f).coerceIn(0.15f, 0.65f))
     }
 
-    val colorScheme = darkColorScheme(
-        primary = effectivePrimary,
-        onPrimary = Color.Black,
-        primaryContainer = if (isLiquidGlassActive) {
-            Color(0xFF38BDF8).copy(alpha = 0.20f)
-        } else {
-            effectivePrimary.copy(alpha = (0.14f + glowAlpha * 0.10f).coerceAtMost(0.32f))
-        },
-        onPrimaryContainer = if (isLiquidGlassActive) LiquidGlassPearlWhite else effectivePrimary,
-        secondary = effectiveSecondary,
-        onSecondary = Color.Black,
-        secondaryContainer = if (isLiquidGlassActive) {
-            Color(0xFFE0F7FA).copy(alpha = 0.15f)
-        } else {
-            effectiveSecondary.copy(alpha = 0.18f)
-        },
-        onSecondaryContainer = effectiveSecondary,
-        tertiary = EmeraldGreen,
-        onTertiary = Color.Black,
-        background = bg,
-        onBackground = if (isLiquidGlassActive) LiquidGlassPearlWhite else TextPrimary,
-        surface = surface,
-        onSurface = if (isLiquidGlassActive) LiquidGlassPearlWhite else TextPrimary,
-        surfaceVariant = surfaceVar,
-        onSurfaceVariant = if (isLiquidGlassActive) Color(0xFFBAE6FD) else TextSecondary,
-        surfaceContainerLowest = bg,
-        surfaceContainerLow = surface,
-        surfaceContainer = surface,
-        surfaceContainerHigh = surfaceVar,
-        outline = border,
-        outlineVariant = outlineVariantColor,
-        error = DangerRed,
-        onError = Color.White
-    )
-
-    val radius = if (isLiquidGlassActive) {
-        resolvedConfig.cornerRadiusDp.coerceAtLeast(22)
+    val colorScheme = if (isMaterial3Active && baseDynamicScheme != null) {
+        baseDynamicScheme.copy(
+            background = Material3Bg,
+            onBackground = Material3OnSurface,
+            onSurface = Material3OnSurface,
+            onSurfaceVariant = Material3OnSurfaceVariant,
+            outlineVariant = outlineVariantColor
+        )
     } else {
-        resolvedConfig.cornerRadiusDp.coerceIn(6, 28)
+        darkColorScheme(
+            primary = effectivePrimary,
+            onPrimary = baseDynamicScheme?.onPrimary ?: if (isMaterial3Active) Color(0xFF102038) else Color.Black,
+            primaryContainer = when {
+                isLiquidGlassActive -> Color(0xFF38BDF8).copy(alpha = 0.20f)
+                baseDynamicScheme != null -> baseDynamicScheme.primaryContainer
+                isMaterial3Active -> effectivePrimary.copy(alpha = 0.18f)
+                else -> effectivePrimary.copy(alpha = (0.14f + glowAlpha * 0.10f).coerceAtMost(0.32f))
+            },
+            onPrimaryContainer = when {
+                isLiquidGlassActive -> LiquidGlassPearlWhite
+                baseDynamicScheme != null -> baseDynamicScheme.onPrimaryContainer
+                isMaterial3Active -> Material3OnSurface
+                else -> effectivePrimary
+            },
+            secondary = effectiveSecondary,
+            onSecondary = baseDynamicScheme?.onSecondary ?: if (isMaterial3Active) Color(0xFF0F261D) else Color.Black,
+            secondaryContainer = when {
+                isLiquidGlassActive -> Color(0xFFE0F7FA).copy(alpha = 0.15f)
+                baseDynamicScheme != null -> baseDynamicScheme.secondaryContainer
+                isMaterial3Active -> effectiveSecondary.copy(alpha = 0.16f)
+                else -> effectiveSecondary.copy(alpha = 0.18f)
+            },
+            onSecondaryContainer = when {
+                baseDynamicScheme != null -> baseDynamicScheme.onSecondaryContainer
+                isMaterial3Active -> Material3OnSurface
+                else -> effectiveSecondary
+            },
+            tertiary = baseDynamicScheme?.tertiary ?: if (isMaterial3Active) Material3TonalTertiary else EmeraldGreen,
+            onTertiary = baseDynamicScheme?.onTertiary ?: if (isMaterial3Active) Color(0xFF1C1830) else Color.Black,
+            tertiaryContainer = baseDynamicScheme?.tertiaryContainer ?: if (isMaterial3Active) Material3TonalTertiary.copy(alpha = 0.18f) else EmeraldGreen.copy(alpha = 0.18f),
+            onTertiaryContainer = baseDynamicScheme?.onTertiaryContainer ?: if (isMaterial3Active) Material3OnSurface else EmeraldGreen,
+            background = bg,
+            onBackground = when {
+                isLiquidGlassActive -> LiquidGlassPearlWhite
+                isMaterial3Active -> Material3OnSurface
+                else -> TextPrimary
+            },
+            surface = surface,
+            onSurface = when {
+                isLiquidGlassActive -> LiquidGlassPearlWhite
+                isMaterial3Active -> Material3OnSurface
+                else -> TextPrimary
+            },
+            surfaceVariant = surfaceVar,
+            onSurfaceVariant = when {
+                isLiquidGlassActive -> Color(0xFFBAE6FD)
+                isMaterial3Active -> Material3OnSurfaceVariant
+                else -> TextSecondary
+            },
+            surfaceContainerLowest = if (isMaterial3Active) Material3SurfaceLowest else bg,
+            surfaceContainerLow = if (isMaterial3Active) Material3SurfaceLow else surface,
+            surfaceContainer = surface,
+            surfaceContainerHigh = surfaceVar,
+            surfaceContainerHighest = if (isMaterial3Active) Material3SurfaceHighest else surfaceVar,
+            outline = if (isMaterial3Active) Material3Border.copy(alpha = 0.72f) else border,
+            outlineVariant = outlineVariantColor,
+            error = DangerRed,
+            onError = Color.White
+        )
+    }
+
+    val radius = when {
+        isLiquidGlassActive -> resolvedConfig.cornerRadiusDp.coerceAtLeast(22)
+        isMaterial3Active -> resolvedConfig.cornerRadiusDp.coerceAtLeast(18)
+        else -> resolvedConfig.cornerRadiusDp.coerceIn(6, 28)
     }
     val customShapes = Shapes(
         extraSmall = RoundedCornerShape((radius / 3).coerceAtLeast(4).dp),

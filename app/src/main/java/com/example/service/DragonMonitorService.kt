@@ -32,10 +32,13 @@ class DragonMonitorService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
     private var monitorJob: Job? = null
     private var lastLogTime = 0L
+    private var lastBatteryBroadcastTickMs = 0L
+    private var lastNotificationUpdateMs = 0L
     private var chargingWakeLock: PowerManager.WakeLock? = null
 
     private fun updateNotificationImmediately() {
         try {
+            lastNotificationUpdateMs = android.os.SystemClock.elapsedRealtime()
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.notify(NOTIFICATION_ID, buildTelemetryNotification())
         } catch (_: Exception) {}
@@ -62,8 +65,15 @@ class DragonMonitorService : Service() {
                     updateNotificationImmediately()
                 }
                 Intent.ACTION_BATTERY_CHANGED -> {
-                    repository.tickTelemetry()
-                    updateNotificationImmediately()
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    val minInterval = if (repository.isMainActivityForeground()) 4_000L else 20_000L
+                    if (now - lastBatteryBroadcastTickMs >= minInterval) {
+                        lastBatteryBroadcastTickMs = now
+                        repository.tickTelemetry()
+                        if (repository.isMainActivityForeground() || now - lastNotificationUpdateMs >= 20_000L) {
+                            updateNotificationImmediately()
+                        }
+                    }
                 }
             }
         }
@@ -93,6 +103,18 @@ class DragonMonitorService : Service() {
         serviceScope.launch {
             val repository = KernelRepository.getInstance(applicationContext)
             repository.themeConfigFlow.collect {
+                updateNotificationImmediately()
+            }
+        }
+        serviceScope.launch {
+            val repository = KernelRepository.getInstance(applicationContext)
+            repository.activeProfileFlow.collect {
+                updateNotificationImmediately()
+            }
+        }
+        serviceScope.launch {
+            val repository = KernelRepository.getInstance(applicationContext)
+            repository.activeCustomProfileFlow.collect {
                 updateNotificationImmediately()
             }
         }
@@ -160,11 +182,11 @@ class DragonMonitorService : Service() {
 
                 val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
                 val isScreenOn = pm?.isInteractive ?: true
+                val isAppFg = repository.isMainActivityForeground()
+                val elapsedNotifyMs = android.os.SystemClock.elapsedRealtime() - lastNotificationUpdateMs
 
-                if (isScreenOn || battery.isCharging) {
-                    try {
-                        notificationManager.notify(NOTIFICATION_ID, buildTelemetryNotification())
-                    } catch (_: Exception) {}
+                if ((isScreenOn || battery.isCharging) && (isAppFg || elapsedNotifyMs >= 20_000L)) {
+                    updateNotificationImmediately()
                 }
 
                 if (thermal.enabled && (battery.temperatureC >= thermal.criticalThresholdC || repository.cpuTempFlow.value >= 75.0f)) {
@@ -193,7 +215,12 @@ class DragonMonitorService : Service() {
                     db.telemetryLogDao().pruneOldLogs()
                 }
 
-                delay(if (isScreenOn || battery.isCharging) 1000L else 15_000L)
+                val intervalMs = when {
+                    isAppFg -> 1500L
+                    isScreenOn || battery.isCharging -> 20_000L
+                    else -> 30_000L
+                }
+                delay(intervalMs)
             }
         }
     }
@@ -343,6 +370,29 @@ class DragonMonitorService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val profilePickerIntent = Intent(this, com.example.ui.overlay.ProfilePickerOverlayActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val profilePickerPendingIntent = PendingIntent.getActivity(
+            this,
+            1004,
+            profilePickerIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val activeCustomProfile = repository.activeCustomProfileFlow.value
+        val activeBuiltInProfile = repository.activeProfileFlow.value
+        val activeProfileTitle = activeCustomProfile?.title ?: activeBuiltInProfile.title
+        val activeProfileShort = when {
+            activeCustomProfile != null -> activeCustomProfile.title.take(8).uppercase()
+            activeBuiltInProfile == com.example.data.model.BatteryProfile.GAMING -> "GAMING"
+            activeBuiltInProfile == com.example.data.model.BatteryProfile.PERFORMANCE -> "PEAK"
+            activeBuiltInProfile == com.example.data.model.BatteryProfile.POWER_SAVING -> "SAVER"
+            activeBuiltInProfile == com.example.data.model.BatteryProfile.BALANCED -> "BALANCE"
+            activeBuiltInProfile == com.example.data.model.BatteryProfile.AUTO -> "AUTO"
+            else -> "DEFAULT"
+        }
+
         val themeConfig = repository.themeConfigFlow.value
         val accentHex = when {
             themeConfig.useCustomPrimaryColor -> String.format(Locale.US, "#%02X%02X%02X", themeConfig.customRed, themeConfig.customGreen, themeConfig.customBlue)
@@ -355,9 +405,85 @@ class DragonMonitorService : Service() {
         }
 
         when (themeConfig.notificationPanelStyle) {
+            com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> {
+                val m3Primary = android.graphics.Color.parseColor("#9BBDF9")
+                val m3Secondary = android.graphics.Color.parseColor("#8CD3AC")
+                val m3TitleColor = android.graphics.Color.parseColor("#DDE1EB")
+                val m3BodyColor = android.graphics.Color.parseColor("#A8B0C2")
+
+                val collapsedView = RemoteViews(packageName, R.layout.notification_gaming_collapsed)
+                collapsedView.setInt(R.id.notif_collapsed_root, "setBackgroundResource", R.drawable.bg_m3_notif_card)
+                collapsedView.setTextViewText(R.id.tv_collapsed_header, "Dragon Tools • Material 3")
+                collapsedView.setTextColor(R.id.tv_collapsed_header, m3Primary)
+                collapsedView.setInt(R.id.tv_collapsed_profile_badge, "setBackgroundResource", R.drawable.bg_m3_notif_badge)
+                collapsedView.setTextViewText(R.id.tv_collapsed_profile_badge, "$activeProfileShort • 120Hz")
+                collapsedView.setTextColor(R.id.tv_collapsed_profile_badge, m3Secondary)
+                collapsedView.setTextViewText(R.id.tv_collapsed_line1, line1Power)
+                collapsedView.setTextColor(R.id.tv_collapsed_line1, m3TitleColor)
+                collapsedView.setTextViewText(R.id.tv_collapsed_line2, line2Drain)
+                collapsedView.setTextColor(R.id.tv_collapsed_line2, m3BodyColor)
+                collapsedView.setInt(R.id.btn_collapsed_profile, "setBackgroundResource", R.drawable.bg_m3_notif_btn)
+                collapsedView.setTextViewText(R.id.btn_collapsed_profile, "⚡ $activeProfileShort")
+                collapsedView.setTextColor(R.id.btn_collapsed_profile, m3Secondary)
+                collapsedView.setOnClickPendingIntent(R.id.btn_collapsed_profile, profilePickerPendingIntent)
+                collapsedView.setInt(R.id.btn_collapsed_rec_fps, "setBackgroundResource", R.drawable.bg_m3_notif_btn)
+                collapsedView.setTextViewText(
+                    R.id.btn_collapsed_rec_fps,
+                    if (isRecording) "⏹ STOP" else "⏺ REC"
+                )
+                collapsedView.setTextColor(R.id.btn_collapsed_rec_fps, m3Primary)
+                collapsedView.setOnClickPendingIntent(R.id.btn_collapsed_rec_fps, fpsRecPendingIntent)
+
+                val expandedView = RemoteViews(packageName, R.layout.notification_gaming_expanded)
+                expandedView.setInt(R.id.notif_expanded_root, "setBackgroundResource", R.drawable.bg_m3_notif_card)
+                expandedView.setTextViewText(R.id.tv_hud_brand, "Dragon Tools • Material 3 UI")
+                expandedView.setTextColor(R.id.tv_hud_brand, m3Primary)
+                expandedView.setInt(R.id.tv_hud_active_profile, "setBackgroundResource", R.drawable.bg_m3_notif_badge)
+                expandedView.setTextViewText(R.id.tv_hud_active_profile, "$activeProfileShort • 120Hz")
+                expandedView.setTextColor(R.id.tv_hud_active_profile, m3Secondary)
+                expandedView.setTextViewText(R.id.tv_notif_line1_power, line1Power)
+                expandedView.setTextColor(R.id.tv_notif_line1_power, m3TitleColor)
+                expandedView.setTextViewText(R.id.tv_notif_line2_drain, line2Drain)
+                expandedView.setTextColor(R.id.tv_notif_line2_drain, m3BodyColor)
+                expandedView.setTextViewText(R.id.tv_notif_line3_screen_on, line3Detail)
+                expandedView.setTextColor(R.id.tv_notif_line3_screen_on, m3BodyColor)
+                expandedView.setTextViewText(R.id.tv_notif_line4_screen_off, line4Detail)
+                expandedView.setTextColor(R.id.tv_notif_line4_screen_off, m3BodyColor)
+                expandedView.setTextViewText(R.id.tv_notif_line5_deep_sleep, line5Detail)
+                expandedView.setTextColor(R.id.tv_notif_line5_deep_sleep, m3BodyColor)
+                expandedView.setTextViewText(R.id.tv_notif_line6_awake, line6Detail)
+                expandedView.setTextColor(R.id.tv_notif_line6_awake, m3BodyColor)
+                expandedView.setInt(R.id.btn_expanded_profile, "setBackgroundResource", R.drawable.bg_m3_notif_btn)
+                expandedView.setTextViewText(R.id.btn_expanded_profile, "⚡ $activeProfileShort")
+                expandedView.setTextColor(R.id.btn_expanded_profile, m3Secondary)
+                expandedView.setOnClickPendingIntent(R.id.btn_expanded_profile, profilePickerPendingIntent)
+                expandedView.setInt(R.id.btn_expanded_rec_fps, "setBackgroundResource", R.drawable.bg_m3_notif_btn)
+                expandedView.setTextViewText(
+                    R.id.btn_expanded_rec_fps,
+                    if (isRecording) "⏹ STOP FPS" else "⏺ RECORD FPS"
+                )
+                expandedView.setTextColor(R.id.btn_expanded_rec_fps, m3Primary)
+                expandedView.setOnClickPendingIntent(R.id.btn_expanded_rec_fps, fpsRecPendingIntent)
+
+                return NotificationCompat.Builder(this, DragonKernelApp.CHANNEL_TELEMETRY)
+                    .setSmallIcon(R.drawable.ic_notif_telemetry)
+                    .setColor(m3Primary)
+                    .setColorized(false)
+                    .setCustomContentView(collapsedView)
+                    .setCustomBigContentView(expandedView)
+                    .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+                    .setContentIntent(openAppPendingIntent)
+                    .setOngoing(true)
+                    .setOnlyAlertOnce(true)
+                    .setShowWhen(false)
+                    .setSilent(true)
+                    .setPriority(NotificationCompat.PRIORITY_LOW)
+                    .build()
+            }
+
             com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> {
                 val titleText = line1Power
-                val subTextHeader = "Dragon Tools Telemetry"
+                val subTextHeader = "Dragon Tools • $activeProfileTitle"
                 return NotificationCompat.Builder(this, DragonKernelApp.CHANNEL_TELEMETRY)
                     .setSmallIcon(R.drawable.ic_notif_telemetry)
                     .setColor(accentColorInt)
@@ -377,7 +503,12 @@ class DragonMonitorService : Service() {
                     .setPriority(NotificationCompat.PRIORITY_LOW)
                     .addAction(
                         0,
-                        if (isRecording) "⏹ Stop REC FPS" else "⏺ Record FPS",
+                        "⚡ $activeProfileShort",
+                        profilePickerPendingIntent
+                    )
+                    .addAction(
+                        0,
+                        if (isRecording) "⏹ Stop FPS" else "⏺ Record FPS",
                         fpsRecPendingIntent
                     )
                     .build()
@@ -388,7 +519,7 @@ class DragonMonitorService : Service() {
                 val secondaryAccentColorInt = try {
                     android.graphics.Color.parseColor(secHex)
                 } catch (_: Exception) {
-                    android.graphics.Color.parseColor("#00E5FF")
+                    android.graphics.Color.parseColor("#5CD6E5")
                 }
                 val presetName = themeConfig.activePresetName.ifEmpty { "Chroma HUD" }
 
@@ -397,14 +528,20 @@ class DragonMonitorService : Service() {
                 collapsedView.setTextViewText(R.id.tv_collapsed_header, "⚡ ${presetName.uppercase()} HUD")
                 collapsedView.setTextColor(R.id.tv_collapsed_header, accentColorInt)
                 collapsedView.setInt(R.id.tv_collapsed_profile_badge, "setBackgroundResource", R.drawable.bg_gaming_notif_badge)
-                collapsedView.setTextViewText(R.id.tv_collapsed_profile_badge, "120 FPS • ACTIVE")
+                collapsedView.setTextViewText(R.id.tv_collapsed_profile_badge, "$activeProfileShort • 120 FPS")
                 collapsedView.setTextColor(R.id.tv_collapsed_profile_badge, secondaryAccentColorInt)
                 collapsedView.setTextViewText(R.id.tv_collapsed_line1, line1Power)
+                collapsedView.setTextColor(R.id.tv_collapsed_line1, android.graphics.Color.parseColor("#F8FAFC"))
                 collapsedView.setTextViewText(R.id.tv_collapsed_line2, line2Drain)
+                collapsedView.setTextColor(R.id.tv_collapsed_line2, android.graphics.Color.parseColor("#94A3B8"))
+                collapsedView.setInt(R.id.btn_collapsed_profile, "setBackgroundResource", R.drawable.bg_gaming_notif_btn)
+                collapsedView.setTextViewText(R.id.btn_collapsed_profile, "⚡ $activeProfileShort")
+                collapsedView.setTextColor(R.id.btn_collapsed_profile, secondaryAccentColorInt)
+                collapsedView.setOnClickPendingIntent(R.id.btn_collapsed_profile, profilePickerPendingIntent)
                 collapsedView.setInt(R.id.btn_collapsed_rec_fps, "setBackgroundResource", R.drawable.bg_gaming_notif_btn)
                 collapsedView.setTextViewText(
                     R.id.btn_collapsed_rec_fps,
-                    if (isRecording) "⏹ STOP REC" else "⏺ REC FPS"
+                    if (isRecording) "⏹ STOP" else "⏺ REC FPS"
                 )
                 collapsedView.setTextColor(R.id.btn_collapsed_rec_fps, accentColorInt)
                 collapsedView.setOnClickPendingIntent(R.id.btn_collapsed_rec_fps, fpsRecPendingIntent)
@@ -414,18 +551,28 @@ class DragonMonitorService : Service() {
                 expandedView.setTextViewText(R.id.tv_hud_brand, "⚡ DRAGON TOOLS // ${presetName.uppercase()}")
                 expandedView.setTextColor(R.id.tv_hud_brand, accentColorInt)
                 expandedView.setInt(R.id.tv_hud_active_profile, "setBackgroundResource", R.drawable.bg_gaming_notif_badge)
-                expandedView.setTextViewText(R.id.tv_hud_active_profile, "${presetName.uppercase()} • 120 FPS")
+                expandedView.setTextViewText(R.id.tv_hud_active_profile, "$activeProfileShort • 120 FPS")
                 expandedView.setTextColor(R.id.tv_hud_active_profile, secondaryAccentColorInt)
                 expandedView.setTextViewText(R.id.tv_notif_line1_power, line1Power)
+                expandedView.setTextColor(R.id.tv_notif_line1_power, android.graphics.Color.WHITE)
                 expandedView.setTextViewText(R.id.tv_notif_line2_drain, line2Drain)
+                expandedView.setTextColor(R.id.tv_notif_line2_drain, android.graphics.Color.parseColor("#E2E8F0"))
                 expandedView.setTextViewText(R.id.tv_notif_line3_screen_on, line3Detail)
+                expandedView.setTextColor(R.id.tv_notif_line3_screen_on, android.graphics.Color.parseColor("#E2E8F0"))
                 expandedView.setTextViewText(R.id.tv_notif_line4_screen_off, line4Detail)
+                expandedView.setTextColor(R.id.tv_notif_line4_screen_off, android.graphics.Color.parseColor("#CBD5E1"))
                 expandedView.setTextViewText(R.id.tv_notif_line5_deep_sleep, line5Detail)
+                expandedView.setTextColor(R.id.tv_notif_line5_deep_sleep, android.graphics.Color.parseColor("#94A3B8"))
                 expandedView.setTextViewText(R.id.tv_notif_line6_awake, line6Detail)
+                expandedView.setTextColor(R.id.tv_notif_line6_awake, android.graphics.Color.parseColor("#94A3B8"))
+                expandedView.setInt(R.id.btn_expanded_profile, "setBackgroundResource", R.drawable.bg_gaming_notif_btn)
+                expandedView.setTextViewText(R.id.btn_expanded_profile, "⚡ $activeProfileShort")
+                expandedView.setTextColor(R.id.btn_expanded_profile, secondaryAccentColorInt)
+                expandedView.setOnClickPendingIntent(R.id.btn_expanded_profile, profilePickerPendingIntent)
                 expandedView.setInt(R.id.btn_expanded_rec_fps, "setBackgroundResource", R.drawable.bg_gaming_notif_btn)
                 expandedView.setTextViewText(
                     R.id.btn_expanded_rec_fps,
-                    if (isRecording) "⏹ STOP FPS RECORDING SESSION" else "⏺ RECORD FPS SESSION"
+                    if (isRecording) "⏹ STOP FPS" else "⏺ RECORD FPS"
                 )
                 expandedView.setTextColor(R.id.btn_expanded_rec_fps, accentColorInt)
                 expandedView.setOnClickPendingIntent(R.id.btn_expanded_rec_fps, fpsRecPendingIntent)
@@ -453,15 +600,22 @@ class DragonMonitorService : Service() {
                 collapsedView.setTextViewText(R.id.tv_collapsed_header, "❄️ LIQUID GLASS COMPACT")
                 collapsedView.setTextColor(R.id.tv_collapsed_header, android.graphics.Color.WHITE)
                 collapsedView.setInt(R.id.tv_collapsed_profile_badge, "setBackgroundResource", R.drawable.bg_liquid_glass_notif_badge)
-                collapsedView.setTextViewText(R.id.tv_collapsed_profile_badge, "FROST • 120 FPS")
+                collapsedView.setTextViewText(R.id.tv_collapsed_profile_badge, "$activeProfileShort • 120 FPS")
                 collapsedView.setTextColor(R.id.tv_collapsed_profile_badge, glassAccent)
                 collapsedView.setTextViewText(R.id.tv_collapsed_line1, line1Power)
+                collapsedView.setTextColor(R.id.tv_collapsed_line1, android.graphics.Color.parseColor("#F0F9FF"))
                 collapsedView.setTextViewText(R.id.tv_collapsed_line2, line2Drain)
+                collapsedView.setTextColor(R.id.tv_collapsed_line2, android.graphics.Color.parseColor("#BAE6FD"))
+                collapsedView.setInt(R.id.btn_collapsed_profile, "setBackgroundResource", R.drawable.bg_liquid_glass_notif_btn)
+                collapsedView.setTextViewText(R.id.btn_collapsed_profile, "⚡ $activeProfileShort")
+                collapsedView.setTextColor(R.id.btn_collapsed_profile, glassAccent)
+                collapsedView.setOnClickPendingIntent(R.id.btn_collapsed_profile, profilePickerPendingIntent)
                 collapsedView.setInt(R.id.btn_collapsed_rec_fps, "setBackgroundResource", R.drawable.bg_liquid_glass_notif_btn)
                 collapsedView.setTextViewText(
                     R.id.btn_collapsed_rec_fps,
                     if (isRecording) "⏹ STOP" else "⏺ REC"
                 )
+                collapsedView.setTextColor(R.id.btn_collapsed_rec_fps, android.graphics.Color.WHITE)
                 collapsedView.setOnClickPendingIntent(R.id.btn_collapsed_rec_fps, fpsRecPendingIntent)
 
                 val expandedView = RemoteViews(packageName, R.layout.notification_gaming_expanded)
@@ -469,19 +623,30 @@ class DragonMonitorService : Service() {
                 expandedView.setTextViewText(R.id.tv_hud_brand, "❄️ LIQUID GLASS // COMPACT HUD")
                 expandedView.setTextColor(R.id.tv_hud_brand, android.graphics.Color.WHITE)
                 expandedView.setInt(R.id.tv_hud_active_profile, "setBackgroundResource", R.drawable.bg_liquid_glass_notif_badge)
-                expandedView.setTextViewText(R.id.tv_hud_active_profile, "FROST HUD")
+                expandedView.setTextViewText(R.id.tv_hud_active_profile, "$activeProfileShort • 120 FPS")
                 expandedView.setTextColor(R.id.tv_hud_active_profile, glassAccent)
                 expandedView.setTextViewText(R.id.tv_notif_line1_power, line1Power)
+                expandedView.setTextColor(R.id.tv_notif_line1_power, android.graphics.Color.WHITE)
                 expandedView.setTextViewText(R.id.tv_notif_line2_drain, line2Drain)
+                expandedView.setTextColor(R.id.tv_notif_line2_drain, android.graphics.Color.parseColor("#E0F7FA"))
                 expandedView.setTextViewText(R.id.tv_notif_line3_screen_on, line3Detail)
+                expandedView.setTextColor(R.id.tv_notif_line3_screen_on, android.graphics.Color.parseColor("#E0F7FA"))
                 expandedView.setTextViewText(R.id.tv_notif_line4_screen_off, line4Detail)
+                expandedView.setTextColor(R.id.tv_notif_line4_screen_off, android.graphics.Color.parseColor("#BAE6FD"))
                 expandedView.setTextViewText(R.id.tv_notif_line5_deep_sleep, line5Detail)
+                expandedView.setTextColor(R.id.tv_notif_line5_deep_sleep, android.graphics.Color.parseColor("#94A3B8"))
                 expandedView.setTextViewText(R.id.tv_notif_line6_awake, line6Detail)
+                expandedView.setTextColor(R.id.tv_notif_line6_awake, android.graphics.Color.parseColor("#94A3B8"))
+                expandedView.setInt(R.id.btn_expanded_profile, "setBackgroundResource", R.drawable.bg_liquid_glass_notif_btn)
+                expandedView.setTextViewText(R.id.btn_expanded_profile, "⚡ $activeProfileShort")
+                expandedView.setTextColor(R.id.btn_expanded_profile, glassAccent)
+                expandedView.setOnClickPendingIntent(R.id.btn_expanded_profile, profilePickerPendingIntent)
                 expandedView.setInt(R.id.btn_expanded_rec_fps, "setBackgroundResource", R.drawable.bg_liquid_glass_notif_btn)
                 expandedView.setTextViewText(
                     R.id.btn_expanded_rec_fps,
-                    if (isRecording) "⏹ STOP FPS RECORDER" else "⏺ RECORD FPS SESSION"
+                    if (isRecording) "⏹ STOP FPS" else "⏺ RECORD FPS"
                 )
+                expandedView.setTextColor(R.id.btn_expanded_rec_fps, android.graphics.Color.WHITE)
                 expandedView.setOnClickPendingIntent(R.id.btn_expanded_rec_fps, fpsRecPendingIntent)
 
                 return NotificationCompat.Builder(this, DragonKernelApp.CHANNEL_TELEMETRY)

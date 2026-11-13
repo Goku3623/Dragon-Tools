@@ -120,34 +120,24 @@ class KernelRepository private constructor(private val context: Context) {
     private val _batteryFlow = MutableStateFlow(BatteryTelemetry())
     val batteryFlow: StateFlow<BatteryTelemetry> = _batteryFlow.asStateFlow()
 
-    // Custom Battery Profiles (User created)
-    private val _customProfilesFlow = MutableStateFlow<List<CustomBatteryProfile>>(
-        listOf(
-            CustomBatteryProfile(
-                id = "custom_daily_ultra",
-                title = "Daily Ultra 42°C",
-                description = "Fine-tuned 42°C thermal limit, 250-900 MHz GPU, Cortex-X4 @ 2.8GHz",
-                thermalLimitC = 42.0f,
-                silverMinFreqKhz = 614400,
-                silverMaxFreqKhz = 1843200,
-                goldMinFreqKhz = 748800,
-                goldMaxFreqKhz = 2496000,
-                primeMinFreqKhz = 844800,
-                primeMaxFreqKhz = 2803200,
-                gpuMinFreqMhz = 250,
-                gpuMaxFreqMhz = 900,
-                governor = "schedutil"
-            )
-        )
-    )
+    // Custom Battery Profiles (User created, persisted)
+    private val _customProfilesFlow = MutableStateFlow<List<CustomBatteryProfile>>(loadSavedCustomProfiles())
     val customProfilesFlow: StateFlow<List<CustomBatteryProfile>> = _customProfilesFlow.asStateFlow()
 
     // Active Profile (persisted across launches; supports ROM's Default inbuilt profiler)
     private val _activeProfileFlow = MutableStateFlow(loadSavedBatteryProfilePrefs())
     val activeProfileFlow: StateFlow<BatteryProfile> = _activeProfileFlow.asStateFlow()
 
-    private val _activeCustomProfileFlow = MutableStateFlow<CustomBatteryProfile?>(null)
+    private val _activeCustomProfileFlow = MutableStateFlow<CustomBatteryProfile?>(
+        loadSavedCustomProfile(_customProfilesFlow.value)
+    )
     val activeCustomProfileFlow: StateFlow<CustomBatteryProfile?> = _activeCustomProfileFlow.asStateFlow()
+
+    // Per-App Battery & Refresh Rate Profiles (POCO F6 AOSP)
+    private val _perAppProfileConfigFlow = MutableStateFlow(loadPerAppProfilePrefs())
+    val perAppProfileConfigFlow: StateFlow<PerAppProfileConfig> = _perAppProfileConfigFlow.asStateFlow()
+    private var wasBypassAutoEnabledByPerApp: Boolean = false
+    private var lastPerAppEnforcedPkg: String = ""
 
     // Accessibility Monitoring Flow
     private val _isAccessibilityEnabledFlow = MutableStateFlow(false)
@@ -184,6 +174,9 @@ class KernelRepository private constructor(private val context: Context) {
     private val _currentFpsFlow = MutableStateFlow(120)
     val currentFpsFlow: StateFlow<Int> = _currentFpsFlow.asStateFlow()
 
+    private val _currentFpsFloatFlow = MutableStateFlow(120.0f)
+    val currentFpsFloatFlow: StateFlow<Float> = _currentFpsFloatFlow.asStateFlow()
+
     private val _fpsHistoryFlow = MutableStateFlow(listOf(119, 120, 118, 120, 119, 120))
     val fpsHistoryFlow: StateFlow<List<Int>> = _fpsHistoryFlow.asStateFlow()
 
@@ -191,7 +184,7 @@ class KernelRepository private constructor(private val context: Context) {
     val isRecordingFpsFlow: StateFlow<Boolean> = _isRecordingFpsFlow.asStateFlow()
 
     // Overlay config
-    private val _fpsOverlayConfigFlow = MutableStateFlow(FpsOverlayConfig())
+    private val _fpsOverlayConfigFlow = MutableStateFlow(loadSavedFpsOverlayPrefs())
     val fpsOverlayConfigFlow: StateFlow<FpsOverlayConfig> = _fpsOverlayConfigFlow.asStateFlow()
 
     // Detailed Dragon FPS Recorder Config & Sessions
@@ -238,27 +231,34 @@ class KernelRepository private constructor(private val context: Context) {
     private fun loadSavedThemePrefs(): ThemeCustomizationConfig {
         return try {
             val prefs = context.getSharedPreferences("dragon_theme_style_prefs", Context.MODE_PRIVATE)
-            val styleName = prefs.getString("notif_style", NotificationPanelStyle.STOCK_SIMPLE.name)
-            val notifStyle = NotificationPanelStyle.entries.find { it.name == styleName } ?: NotificationPanelStyle.STOCK_SIMPLE
+            val schemaVersion = prefs.getInt("theme_schema_version", 1)
+            if (schemaVersion < 2) {
+                val defaultM3 = ThemeCustomizationConfig()
+                saveThemePrefs(defaultM3)
+                return defaultM3
+            }
 
-            val surfaceName = prefs.getString("surface_mode", SurfaceThemeMode.OBSIDIAN_CARBON.name)
-            val surfaceMode = SurfaceThemeMode.entries.find { it.name == surfaceName } ?: SurfaceThemeMode.OBSIDIAN_CARBON
+            val styleName = prefs.getString("notif_style", NotificationPanelStyle.MATERIAL_3_UI.name)
+            val notifStyle = NotificationPanelStyle.entries.find { it.name == styleName } ?: NotificationPanelStyle.MATERIAL_3_UI
 
-            val primaryAccent = prefs.getInt("primary_accent_index", 0)
-            val secondaryAccent = prefs.getInt("secondary_accent_index", 1)
+            val surfaceName = prefs.getString("surface_mode", SurfaceThemeMode.MATERIAL_3.name)
+            val surfaceMode = SurfaceThemeMode.entries.find { it.name == surfaceName } ?: SurfaceThemeMode.MATERIAL_3
+
+            val primaryAccent = prefs.getInt("primary_accent_index", 10)
+            val secondaryAccent = prefs.getInt("secondary_accent_index", 11)
             val useCustomPrimary = prefs.getBoolean("use_custom_primary", false)
-            val customR = prefs.getInt("custom_red", 255)
-            val customG = prefs.getInt("custom_green", 42)
-            val customB = prefs.getInt("custom_blue", 75)
-            val borderGlow = prefs.getFloat("border_glow", 0.65f)
-            val headerGlow = prefs.getFloat("header_glow", 0.25f)
-            val cornerRadius = prefs.getInt("corner_radius_dp", 18)
+            val customR = prefs.getInt("custom_red", 155)
+            val customG = prefs.getInt("custom_green", 189)
+            val customB = prefs.getInt("custom_blue", 249)
+            val borderGlow = prefs.getFloat("border_glow", 0.22f)
+            val headerGlow = prefs.getFloat("header_glow", 0.10f)
+            val cornerRadius = prefs.getInt("corner_radius_dp", 22)
             val dynamicColor = prefs.getBoolean("use_dynamic_color", false)
             val liquidGlass = prefs.getBoolean("is_liquid_glass", false)
             val lgOpacity = prefs.getFloat("liquid_glass_opacity", 0.28f)
             val lgRefraction = prefs.getFloat("liquid_glass_refraction", 0.85f)
             val lgTint = prefs.getString("liquid_glass_tint", "Frosted Ice") ?: "Frosted Ice"
-            val presetName = prefs.getString("active_preset_name", "ROG Crimson Core") ?: "ROG Crimson Core"
+            val presetName = prefs.getString("active_preset_name", "Material 3 You") ?: "Material 3 You"
 
             ThemeCustomizationConfig(
                 primaryAccentIndex = primaryAccent,
@@ -288,6 +288,7 @@ class KernelRepository private constructor(private val context: Context) {
         try {
             val prefs = context.getSharedPreferences("dragon_theme_style_prefs", Context.MODE_PRIVATE)
             prefs.edit()
+                .putInt("theme_schema_version", 2)
                 .putString("notif_style", config.notificationPanelStyle.name)
                 .putInt("primary_accent_index", config.primaryAccentIndex)
                 .putInt("secondary_accent_index", config.secondaryAccentIndex)
@@ -362,7 +363,17 @@ class KernelRepository private constructor(private val context: Context) {
     private val _adBlockerConfigFlow = MutableStateFlow(loadAdBlockerPrefs())
     val adBlockerConfigFlow: StateFlow<AdBlockerConfig> = _adBlockerConfigFlow.asStateFlow()
 
-    private val _adBlockerTelemetryFlow = MutableStateFlow(AdBlockerTelemetry())
+    private val _adBlockerTelemetryFlow = MutableStateFlow(
+        AdBlockerTelemetry(
+            isActive = _adBlockerConfigFlow.value.isGlobalEnabled,
+            isQuicBlocked = _adBlockerConfigFlow.value.isGlobalEnabled && _adBlockerConfigFlow.value.blockQuicProtocol,
+            enforcementSummary = if (_adBlockerConfigFlow.value.isGlobalEnabled) {
+                "Multi-Layer Shield Armed (LSPosed 5-Layer Hook + Hosts + DoT + QUIC Drop)"
+            } else {
+                "Standby • Ad Blocker is OFF"
+            }
+        )
+    )
     val adBlockerTelemetryFlow: StateFlow<AdBlockerTelemetry> = _adBlockerTelemetryFlow.asStateFlow()
 
     @Volatile
@@ -484,6 +495,126 @@ class KernelRepository private constructor(private val context: Context) {
         }
     }
 
+    private fun defaultCustomProfilesList(): List<CustomBatteryProfile> = emptyList()
+
+    private fun saveCustomProfilesPrefs(profiles: List<CustomBatteryProfile>) {
+        try {
+            val prefs = context.getSharedPreferences("dragon_custom_profiles_prefs", Context.MODE_PRIVATE)
+            val arr = org.json.JSONArray()
+            for (p in profiles) {
+                val obj = org.json.JSONObject().apply {
+                    put("id", p.id)
+                    put("title", p.title)
+                    put("description", p.description)
+                    put("thermalLimitC", p.thermalLimitC.toDouble())
+                    put("socThermalLimitC", p.socThermalLimitC.toDouble())
+                    put("gpuThermalLimitC", p.gpuThermalLimitC.toDouble())
+                    put("silverMinFreqKhz", p.silverMinFreqKhz)
+                    put("silverMaxFreqKhz", p.silverMaxFreqKhz)
+                    put("goldMinFreqKhz", p.goldMinFreqKhz)
+                    put("goldMaxFreqKhz", p.goldMaxFreqKhz)
+                    put("primeMinFreqKhz", p.primeMinFreqKhz)
+                    put("primeMaxFreqKhz", p.primeMaxFreqKhz)
+                    put("gpuMinFreqMhz", p.gpuMinFreqMhz)
+                    put("gpuMaxFreqMhz", p.gpuMaxFreqMhz)
+                    put("governor", p.governor)
+                    put("gpuGovernor", p.gpuGovernor)
+                    put("adrenoBoostVal", p.adrenoBoostVal)
+                    put("gpuPowerLevel", p.gpuPowerLevel)
+                    put("cpuBoostEnabled", p.cpuBoostEnabled)
+                    put("inputBoostEnabled", p.inputBoostEnabled)
+                    put("cpuBoostDurationMs", p.cpuBoostDurationMs)
+                    put("cpuBoostGpuThreshold", p.cpuBoostGpuThreshold)
+                    put("waltDownRateLimitUs", p.waltDownRateLimitUs)
+                    put("uclampTopMinPct", p.uclampTopMinPct)
+                    put("uclampTopMaxPct", p.uclampTopMaxPct)
+                    put("latencySensitive", p.latencySensitive)
+                    put("busScaleMode", p.busScaleMode)
+                    put("suppressRomThermal", p.suppressRomThermal)
+                }
+                arr.put(obj)
+            }
+            prefs.edit()
+                .putBoolean("has_saved_custom_profiles", true)
+                .putString("profiles_json", arr.toString())
+                .apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun loadSavedCustomProfiles(): List<CustomBatteryProfile> {
+        return try {
+            val prefs = context.getSharedPreferences("dragon_custom_profiles_prefs", Context.MODE_PRIVATE)
+            if (!prefs.getBoolean("has_saved_custom_profiles", false)) {
+                prefs.edit().putBoolean("removed_inbuilt_custom_v1", true).apply()
+                return emptyList()
+            }
+            val raw = prefs.getString("profiles_json", "[]") ?: "[]"
+            val arr = org.json.JSONArray(raw)
+            val list = mutableListOf<CustomBatteryProfile>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val id = obj.optString("id", "").takeIf { it.isNotBlank() } ?: continue
+                list.add(
+                    CustomBatteryProfile(
+                        id = id,
+                        title = obj.optString("title", "Custom Profile"),
+                        description = obj.optString("description", "Custom SM8635 Profile"),
+                        thermalLimitC = obj.optDouble("thermalLimitC", 42.0).toFloat().coerceIn(35.0f, 50.0f),
+                        socThermalLimitC = obj.optDouble("socThermalLimitC", 85.0).toFloat().coerceIn(65.0f, 98.0f),
+                        gpuThermalLimitC = obj.optDouble("gpuThermalLimitC", 82.0).toFloat().coerceIn(60.0f, 95.0f),
+                        silverMinFreqKhz = obj.optInt("silverMinFreqKhz", 614400).coerceIn(300000, 2016000),
+                        silverMaxFreqKhz = obj.optInt("silverMaxFreqKhz", 2016000).coerceIn(300000, 2016000),
+                        goldMinFreqKhz = obj.optInt("goldMinFreqKhz", 748800).coerceIn(300000, 2803200),
+                        goldMaxFreqKhz = obj.optInt("goldMaxFreqKhz", 2803200).coerceIn(300000, 2803200),
+                        primeMinFreqKhz = obj.optInt("primeMinFreqKhz", 844800).coerceIn(300000, 3014400),
+                        primeMaxFreqKhz = obj.optInt("primeMaxFreqKhz", 3014400).coerceIn(300000, 3014400),
+                        gpuMinFreqMhz = obj.optInt("gpuMinFreqMhz", 250).coerceIn(150, 1100),
+                        gpuMaxFreqMhz = obj.optInt("gpuMaxFreqMhz", 1100).coerceIn(250, 1100),
+                        governor = obj.optString("governor", "walt"),
+                        gpuGovernor = obj.optString("gpuGovernor", "msm-adreno-tz"),
+                        adrenoBoostVal = obj.optInt("adrenoBoostVal", 1).coerceIn(0, 3),
+                        gpuPowerLevel = obj.optInt("gpuPowerLevel", 1).coerceIn(0, 5),
+                        cpuBoostEnabled = obj.optBoolean("cpuBoostEnabled", true),
+                        inputBoostEnabled = obj.optBoolean("inputBoostEnabled", true),
+                        cpuBoostDurationMs = obj.optInt("cpuBoostDurationMs", 100).coerceIn(0, 500),
+                        cpuBoostGpuThreshold = obj.optInt("cpuBoostGpuThreshold", 40).coerceIn(5, 95),
+                        waltDownRateLimitUs = obj.optInt("waltDownRateLimitUs", 500000).coerceIn(0, 2000000),
+                        uclampTopMinPct = obj.optInt("uclampTopMinPct", 15).coerceIn(0, 60),
+                        uclampTopMaxPct = obj.optInt("uclampTopMaxPct", 100).coerceIn(40, 100),
+                        latencySensitive = obj.optBoolean("latencySensitive", false),
+                        busScaleMode = obj.optString("busScaleMode", "DYNAMIC"),
+                        suppressRomThermal = obj.optBoolean("suppressRomThermal", true)
+                    )
+                )
+            }
+            if (!prefs.getBoolean("removed_inbuilt_custom_v1", false)) {
+                val filtered = list.filterNot { it.id == "custom_daily_ultra" }
+                prefs.edit().putBoolean("removed_inbuilt_custom_v1", true).apply()
+                if (filtered.size != list.size) {
+                    saveCustomProfilesPrefs(filtered)
+                }
+                val profPrefs = context.getSharedPreferences("dragon_battery_profile_prefs", Context.MODE_PRIVATE)
+                if (profPrefs.getString("active_custom_profile_id", "") == "custom_daily_ultra") {
+                    profPrefs.edit().putString("active_custom_profile_id", "").apply()
+                }
+                return filtered
+            }
+            list
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun loadSavedCustomProfile(profiles: List<CustomBatteryProfile>): CustomBatteryProfile? {
+        return try {
+            val prefs = context.getSharedPreferences("dragon_battery_profile_prefs", Context.MODE_PRIVATE)
+            val savedCustomId = prefs.getString("active_custom_profile_id", "") ?: ""
+            if (savedCustomId.isBlank() || savedCustomId == "custom_daily_ultra") null else profiles.find { it.id == savedCustomId }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun saveActiveBatteryProfilePrefs(profile: BatteryProfile, customProfileId: String? = null) {
         try {
             val prefs = context.getSharedPreferences("dragon_battery_profile_prefs", Context.MODE_PRIVATE)
@@ -504,6 +635,115 @@ class KernelRepository private constructor(private val context: Context) {
         }
     }
 
+    private fun savePerAppProfilePrefs(config: PerAppProfileConfig) {
+        try {
+            val prefs = context.getSharedPreferences("dragon_per_app_profile_prefs", Context.MODE_PRIVATE)
+            val serializedRules = config.rules.joinToString("\n") { rule ->
+                listOf(
+                    rule.packageName.replace("|", ""),
+                    rule.appName.replace("|", ""),
+                    rule.profile.name,
+                    rule.customProfileId ?: "",
+                    rule.refreshRateHz.toString(),
+                    rule.enableBypassCharging.toString(),
+                    rule.clearRamOnLaunch.toString()
+                ).joinToString("|")
+            }
+            prefs.edit()
+                .putBoolean("is_enabled", config.isEnabled)
+                .putString("fallback_profile", config.fallbackProfile.name)
+                .putString("fallback_custom_id", config.fallbackCustomProfileId ?: "")
+                .putBoolean("has_saved_rules", true)
+                .putString("rules_v1", serializedRules)
+                .apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun loadPerAppProfilePrefs(): PerAppProfileConfig {
+        return try {
+            val prefs = context.getSharedPreferences("dragon_per_app_profile_prefs", Context.MODE_PRIVATE)
+            val isEnabled = prefs.getBoolean("is_enabled", true)
+            val savedGlobal = loadSavedBatteryProfilePrefs()
+            val fbName = prefs.getString("fallback_profile", savedGlobal.name)
+            val fbProf = BatteryProfile.entries.find { it.name == fbName } ?: savedGlobal
+            val fbCustom = prefs.getString("fallback_custom_id", "")?.takeIf { it.isNotBlank() }
+            val hasSaved = prefs.getBoolean("has_saved_rules", false)
+            val rawRules = prefs.getString("rules_v1", "") ?: ""
+            val parsedRules = if (hasSaved) {
+                rawRules.lines().mapNotNull { line ->
+                    val parts = line.trim().split("|")
+                    if (parts.size >= 7 && parts[0].isNotBlank()) {
+                        val prof = BatteryProfile.entries.find { it.name == parts[2] } ?: BatteryProfile.BALANCED
+                        AppBatteryProfileRule(
+                            packageName = parts[0],
+                            appName = parts[1].ifBlank { parts[0] },
+                            profile = prof,
+                            customProfileId = parts[3].takeIf { it.isNotBlank() },
+                            refreshRateHz = parts[4].toIntOrNull()?.coerceIn(60, 120) ?: 120,
+                            enableBypassCharging = parts[5].toBooleanStrictOrNull() ?: false,
+                            clearRamOnLaunch = parts[6].toBooleanStrictOrNull() ?: false
+                        )
+                    } else null
+                }
+            } else {
+                listOf(
+                    AppBatteryProfileRule(
+                        packageName = "com.pubg.imobile",
+                        appName = "BGMI / PUBG Mobile",
+                        profile = BatteryProfile.GAMING,
+                        refreshRateHz = 120,
+                        enableBypassCharging = true,
+                        clearRamOnLaunch = true
+                    ),
+                    AppBatteryProfileRule(
+                        packageName = "com.miHoYo.GenshinImpact",
+                        appName = "Genshin Impact",
+                        profile = BatteryProfile.GAMING,
+                        refreshRateHz = 120,
+                        enableBypassCharging = true,
+                        clearRamOnLaunch = true
+                    ),
+                    AppBatteryProfileRule(
+                        packageName = "com.kurogame.wutheringwaves.global",
+                        appName = "Wuthering Waves",
+                        profile = BatteryProfile.GAMING,
+                        refreshRateHz = 120,
+                        enableBypassCharging = true,
+                        clearRamOnLaunch = true
+                    ),
+                    AppBatteryProfileRule(
+                        packageName = "com.activision.callofduty.shooter",
+                        appName = "Call of Duty: Mobile",
+                        profile = BatteryProfile.GAMING,
+                        refreshRateHz = 120,
+                        enableBypassCharging = true,
+                        clearRamOnLaunch = false
+                    ),
+                    AppBatteryProfileRule(
+                        packageName = "com.google.android.youtube",
+                        appName = "YouTube",
+                        profile = BatteryProfile.POWER_SAVING,
+                        refreshRateHz = 60,
+                        enableBypassCharging = false,
+                        clearRamOnLaunch = false
+                    )
+                )
+            }
+            PerAppProfileConfig(
+                isEnabled = isEnabled,
+                fallbackProfile = fbProf,
+                fallbackCustomProfileId = fbCustom,
+                activeForegroundPackage = context.packageName,
+                activeForegroundAppName = "Dragon Kernel Manager",
+                activeEnforcedProfileTitle = "${fbProf.title} (Global)",
+                isPerAppOverrideActive = false,
+                rules = parsedRules
+            )
+        } catch (_: Exception) {
+            PerAppProfileConfig()
+        }
+    }
+
     private fun saveThermalControlPrefs(config: ThermalControlConfig) {
         try {
             val prefs = context.getSharedPreferences("dragon_thermal_control_prefs", Context.MODE_PRIVATE)
@@ -516,6 +756,7 @@ class KernelRepository private constructor(private val context: Context) {
                 .putBoolean("ctrl_cpu_freq_qos", config.controlCpuFreqQos)
                 .putBoolean("ctrl_gpu_pwrlevel", config.controlGpuPwrLevel)
                 .putBoolean("suppress_rom_throttle", config.suppressPrematureRomThrottle)
+                .putBoolean("bg_thermal_shedding", config.backgroundThermalShedding)
                 .apply()
         } catch (_: Exception) {}
     }
@@ -533,25 +774,31 @@ class KernelRepository private constructor(private val context: Context) {
             val ctrlCpu = prefs.getBoolean("ctrl_cpu_freq_qos", true)
             val ctrlGpu = prefs.getBoolean("ctrl_gpu_pwrlevel", true)
             val suppressRom = prefs.getBoolean("suppress_rom_throttle", true)
+            val bgShed = prefs.getBoolean("bg_thermal_shedding", true)
             val savedProf = loadSavedBatteryProfilePrefs()
-            val isRomPassthrough = (savedProf == BatteryProfile.DEFAULT)
-            val effLimit = if (sync) savedProf.thermalLimitC else customLim
+            val savedCustom = loadSavedCustomProfile(loadSavedCustomProfiles())
+            val isRomPassthrough = (savedCustom == null && savedProf == BatteryProfile.DEFAULT)
+            val profThermal = savedCustom?.thermalLimitC ?: savedProf.thermalLimitC
+            val effLimit = if (sync) profThermal else customLim
             ThermalControlConfig(
                 syncWithBatteryProfiler = sync,
                 customThermalLimitC = customLim,
                 activeEffectiveLimitC = effLimit,
+                activeEffectiveSocLimitC = savedCustom?.socThermalLimitC ?: savedProf.socThermalLimitC,
+                activeEffectiveGpuLimitC = savedCustom?.gpuThermalLimitC ?: savedProf.gpuThermalLimitC,
                 policy = pol,
                 sensorSource = src,
                 cooldownHysteresisC = hyst,
                 controlCpuFreqQos = ctrlCpu,
                 controlGpuPwrLevel = ctrlGpu,
                 suppressPrematureRomThrottle = suppressRom,
+                backgroundThermalShedding = bgShed,
                 isRomDefaultPassthrough = isRomPassthrough,
                 currentThrottleStage = 0,
                 currentThrottleStatus = if (isRomPassthrough) {
                     "ROM's Default Active • Native ROM Inbuilt Profiler & Thermal Engine in 100% Free Control"
                 } else {
-                    String.format(java.util.Locale.US, "Synced with %s • Target Limit %.1f°C • Stage 0 (Unthrottled)", savedProf.title, effLimit)
+                    String.format(java.util.Locale.US, "Synced with %s • Target Limit %.1f°C • Stage 0 (Unthrottled)", savedCustom?.title ?: savedProf.title, effLimit)
                 }
             )
         } catch (_: Exception) {
@@ -564,6 +811,7 @@ class KernelRepository private constructor(private val context: Context) {
             val night = config.nightCharging
             val prefs = context.getSharedPreferences("dragon_charging_prefs", Context.MODE_PRIVATE)
             prefs.edit()
+                .putBoolean("charging_presets_enabled", config.chargingPresetsEnabled)
                 .putString("speed_mode", config.speedMode.name)
                 .putBoolean("bypass_charging", config.bypassCharging)
                 .putBoolean("manual_limiter_enabled", config.manualCurrentLimiterEnabled)
@@ -598,6 +846,7 @@ class KernelRepository private constructor(private val context: Context) {
     private fun loadChargingControlsPrefs(): ChargingControls {
         return try {
             val prefs = context.getSharedPreferences("dragon_charging_prefs", Context.MODE_PRIVATE)
+            val presetsEnabled = prefs.getBoolean("charging_presets_enabled", false)
             val modeName = prefs.getString("speed_mode", ChargingSpeedMode.HYPERCHARGE_90W.name)
             val speedMode = ChargingSpeedMode.entries.find { it.name == modeName } ?: ChargingSpeedMode.HYPERCHARGE_90W
             val tModeName = prefs.getString("custom_temp_mode", CurrentLimiterThermalMode.SMART_STEP_DOWN.name)
@@ -649,6 +898,7 @@ class KernelRepository private constructor(private val context: Context) {
             )
 
             ChargingControls(
+                chargingPresetsEnabled = presetsEnabled,
                 speedMode = speedMode,
                 bypassCharging = prefs.getBoolean("bypass_charging", false),
                 manualCurrentLimiterEnabled = manualLimiterEnabled,
@@ -669,10 +919,10 @@ class KernelRepository private constructor(private val context: Context) {
                 } else {
                     "Disabled • Full selected current ceiling active up to max limit"
                 },
-                activeOverrideStatus = if (manualLimiterEnabled) {
-                    "Custom Current Limiter Active: $limitMa mA Max Ceiling"
-                } else {
-                    "Active Preset: ${speedMode.label} (${speedMode.maxCurrentMa} mA / ${speedMode.maxWattage}W Max)"
+                activeOverrideStatus = when {
+                    manualLimiterEnabled -> "Custom Current Limiter Active: $limitMa mA Max Ceiling"
+                    presetsEnabled -> "Active Preset: ${speedMode.label} (${speedMode.maxCurrentMa} mA / ${speedMode.maxWattage}W Max)"
+                    else -> "Charging Presets OFF • ROM Default Inbuilt Charging Speed & Thermal Active"
                 },
                 nightCharging = loadedNight,
                 bypassThermalLimit = prefs.getBoolean("bypass_thermal_limit", false),
@@ -856,6 +1106,10 @@ class KernelRepository private constructor(private val context: Context) {
     @Volatile
     private var lastChargingEnforcementMs: Long = 0L
     @Volatile
+    private var lastChargingEnforcedSignature: String = ""
+    @Volatile
+    private var lastFullChargingVerifyMs: Long = 0L
+    @Volatile
     private var chargingLimiterJob: kotlinx.coroutines.Job? = null
     @Volatile
     private var lastPerformanceEnforcementMs: Long = 0L
@@ -893,6 +1147,9 @@ class KernelRepository private constructor(private val context: Context) {
                 pollPowerSupplySysfsAsync()
                 pollRootRamAndVramSysfsAsync()
                 enforceActiveChargingRulesAsync(forceImmediate = true)
+                if (_activeCustomProfileFlow.value != null || _activeProfileFlow.value != BatteryProfile.DEFAULT) {
+                    enforceActivePerformanceRulesAsync(forceImmediate = true)
+                }
             }
             refreshDeviceRamAndVramTelemetrySync()
         }
@@ -937,6 +1194,8 @@ class KernelRepository private constructor(private val context: Context) {
         }
     }
 
+    fun isMainActivityForeground(): Boolean = isMainActivityInForeground
+
     fun onMainActivityVisibilityChanged(isVisible: Boolean) {
         isMainActivityInForeground = isVisible
         if (isVisible) {
@@ -977,6 +1236,8 @@ class KernelRepository private constructor(private val context: Context) {
         return false
     }
 
+    @Volatile private var lastUsageEventsQueryMs: Long = 0L
+
     private fun detectForegroundPackageViaUsageStats(): String? {
         if (isMainActivityInForeground) {
             return context.packageName
@@ -985,8 +1246,13 @@ class KernelRepository private constructor(private val context: Context) {
             val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as? android.app.usage.UsageStatsManager
                 ?: return liveDetectedFgPkg.takeIf { !isTransientOrOverlayPackage(it) }
             val now = System.currentTimeMillis()
-            // Query up to 60 minutes of usage events so long gaming sessions (>15s without new activity transitions) stay locked onto the game
-            val events = usm.queryEvents(now - 3_600_000L, now)
+            val windowStart = if (liveDetectedFgPkg.isBlank() || lastUsageEventsQueryMs <= 0L || (now - lastUsageEventsQueryMs) > 60_000L) {
+                now - 600_000L
+            } else {
+                (lastUsageEventsQueryMs - 2_000L).coerceAtLeast(now - 15_000L)
+            }
+            lastUsageEventsQueryMs = now
+            val events = usm.queryEvents(windowStart, now)
             val event = android.app.usage.UsageEvents.Event()
             var latestPkg: String? = null
             var latestTime = 0L
@@ -1075,12 +1341,13 @@ class KernelRepository private constructor(private val context: Context) {
                 val isFrameGenGameInFg = _frameGenTelemetryFlow.value.isForegroundAddedGame
                 val isFrameGenPreviewOn = fgCfg.floatingWindowPreviewActive
                 val hasAddedFrameGenGames = fgCfg.addedGamePackages.isNotEmpty() && (fgCfg.isEnabled || fgCfg.autoActivateForGames)
+                val hasPerAppRules = _perAppProfileConfigFlow.value.let { it.isEnabled && it.rules.isNotEmpty() }
 
                 if (isInteractive) {
                     val needActiveFpsPoll = isRec || isOverlayOn || isFrameGenGameInFg || isFrameGenPreviewOn
                     if (needActiveFpsPoll) {
                         pollPerAppAndGameRealFpsSuspend(lightweightOnly = false)
-                    } else {
+                    } else if (hasPerAppRules || hasAddedFrameGenGames || isMainActivityInForeground) {
                         // Lightweight foreground app/game detection without invoking heavy shell dumpsys commands
                         pollPerAppAndGameRealFpsSuspend(lightweightOnly = true)
                     }
@@ -1114,16 +1381,19 @@ class KernelRepository private constructor(private val context: Context) {
                         }
                     }
 
-                    updateLiveWholeScreenFpsTick()
+                    if (needActiveFpsPoll || isMainActivityInForeground) {
+                        updateLiveWholeScreenFpsTick()
+                    }
                 } else {
                     FrameGenMiniOverlayManager.hide(context)
                 }
                 val intervalMs = when {
-                    !isInteractive -> 2500L
+                    !isInteractive -> 4_000L
                     isRec -> _fpsRecorderConfigFlow.value.samplingIntervalMs.toLong().coerceIn(500L, 1500L)
-                    isFrameGenGameInFg || isOverlayOn || isFrameGenPreviewOn -> 1000L
-                    isMainActivityInForeground -> 1800L
-                    else -> 2200L
+                    isFrameGenGameInFg || isOverlayOn || isFrameGenPreviewOn -> 1_000L
+                    isMainActivityInForeground -> 1_800L
+                    hasPerAppRules || hasAddedFrameGenGames -> 3_000L
+                    else -> 6_000L
                 }
                 kotlinx.coroutines.delay(intervalMs)
             }
@@ -1426,6 +1696,7 @@ class KernelRepository private constructor(private val context: Context) {
         }
 
         _currentFpsFlow.value = currentFps
+        _currentFpsFloatFlow.value = baseFloatFps
 
         val historyList = _fpsHistoryFlow.value.toMutableList()
         historyList.add(currentFps)
@@ -1815,6 +2086,8 @@ class KernelRepository private constructor(private val context: Context) {
         hasTriggeredCustomLevelResetThisCycle = false
         _batteryFlow.value = _batteryFlow.value.copy(isCharging = true)
         lastChargingEnforcementMs = 0L
+        lastChargingEnforcedSignature = ""
+        lastFullChargingVerifyMs = 0L
         enforceActiveChargingRulesAsync(forceImmediate = true)
         if (_freshStartConfigFlow.value.autoFreshStartOnPlugIn) {
             startFreshTelemetrySession(reason = "Charger Plugged In")
@@ -1919,6 +2192,23 @@ class KernelRepository private constructor(private val context: Context) {
             return
         }
 
+        val sig = "$needBypass|$needThermalBypass|$isNightWindowOpen|$isTopUpPhase|$isNightThermalPaused|" +
+                "${night.isEnabled}|${night.trickleCurrentMa}|${night.targetLimitPercent}|${night.muteChargingLed}|" +
+                "${charging.manualCurrentLimiterEnabled}|${charging.manualCurrentLimitMa}|${charging.chargingPresetsEnabled}|" +
+                "${charging.speedMode.maxCurrentMa}|${charging.lockSysfsNodesReadOnly}|${charging.forcePmicVoterOverride}|" +
+                "${charging.customTempLimitEnabled}|${charging.customTempLimitC}|${charging.customTempFallbackCurrentMa}|" +
+                "${charging.customTempCooldownDeltaC}|${charging.customTempThermalMode}|${charging.isCustomTempThrottlingActive}|" +
+                "${bat.isCharging}"
+        if (!forceImmediate &&
+            sig == lastChargingEnforcedSignature &&
+            (now - lastFullChargingVerifyMs) < 30_000L &&
+            (!needBypass || bat.isBypassHardwareVerified)
+        ) {
+            return
+        }
+        lastChargingEnforcedSignature = sig
+        lastFullChargingVerifyMs = now
+
         scope.launch {
             if (!RootHelper.isRootAvailable) {
                 RootHelper.refreshRootStatus()
@@ -1969,7 +2259,12 @@ class KernelRepository private constructor(private val context: Context) {
                 )
             }
 
-            if (isNightWindowOpen || charging.manualCurrentLimiterEnabled || needThermalBypass || shouldEnforceCurrentCeiling) {
+            val shouldActivelyLimit = isNightWindowOpen ||
+                    charging.manualCurrentLimiterEnabled ||
+                    charging.chargingPresetsEnabled ||
+                    needThermalBypass
+
+            if (shouldActivelyLimit) {
                 val nightTargetMa = if (isTopUpPhase) {
                     min(1800, night.trickleCurrentMa + 400)
                 } else {
@@ -1978,7 +2273,8 @@ class KernelRepository private constructor(private val context: Context) {
                 val targetMa = when {
                     isNightWindowOpen -> nightTargetMa
                     charging.manualCurrentLimiterEnabled -> charging.manualCurrentLimitMa
-                    else -> charging.speedMode.maxCurrentMa
+                    charging.chargingPresetsEnabled -> charging.speedMode.maxCurrentMa
+                    else -> 20000
                 }.coerceIn(500, 20000)
 
                 val nightTempLimitEnabled = isNightWindowOpen || (charging.manualCurrentLimiterEnabled && charging.customTempLimitEnabled)
@@ -2002,8 +2298,8 @@ class KernelRepository private constructor(private val context: Context) {
                     isTempThrottlingTriggered = isNightThermalPaused || charging.isCustomTempThrottlingActive,
                     externalBypassActive = false
                 )
-            } else if (wasNightActive) {
-                // Night charging window just ended and Custom Current Limiter is OFF: restore ROM default speed & thermal
+            } else if (wasNightActive || forceImmediate) {
+                // Charging Presets OFF, Custom Current Limiter OFF, and Night Charging OFF: restore ROM default speed & thermal
                 RootHelper.enforceRootChargingCurrentLimit(
                     packageName = context.packageName,
                     enabled = false,
@@ -2105,7 +2401,22 @@ class KernelRepository private constructor(private val context: Context) {
     }
 
     @Volatile private var sysfsCpuCurKhz: Map<Int, Int> = emptyMap()
+    @Volatile private var sysfsCpuMinKhz: Map<Int, Int> = emptyMap()
+    @Volatile private var sysfsCpuMaxKhz: Map<Int, Int> = emptyMap()
+    @Volatile private var sysfsCpuGov: Map<Int, String> = emptyMap()
     @Volatile private var sysfsGpuCurMhz: Int? = null
+    @Volatile private var sysfsGpuMinMhz: Int? = null
+    @Volatile private var sysfsGpuMaxMhz: Int? = null
+    @Volatile private var sysfsGpuGov: String? = null
+    @Volatile private var lastEnforcedCpuMinKhz: Map<Int, Int> = emptyMap()
+    @Volatile private var lastEnforcedCpuMaxKhz: Map<Int, Int> = emptyMap()
+    @Volatile private var lastEnforcedGpuMinMhz: Int? = null
+    @Volatile private var lastEnforcedGpuMaxMhz: Int? = null
+    @Volatile private var isEnforcerDaemonAlive: Boolean = false
+    @Volatile private var lastRootTelemetryPollMs: Long = 0L
+    @Volatile private var cachedSocZonePath: String? = null
+    @Volatile private var consecutiveDriftCount: Int = 0
+    @Volatile private var lastRamTelemetrySyncMs: Long = 0L
 
     private fun formatDurationCompact(ms: Long): String {
         val totalSec = (ms / 1000L).coerceAtLeast(0L)
@@ -2180,20 +2491,149 @@ class KernelRepository private constructor(private val context: Context) {
             sysfsTempC = directTempRaw / 10.0f
         }
 
-        // If direct file reading returned null and root is available, query persistent su pipe asynchronously (never runBlocking)
-        var parsedThermStateLine: String? = null
+        // Try reading thermal state, enforcer pid, CPU & GPU telemetry in-process first (0 shell forks!)
+        var parsedThermStateLine: String? = readDirectSysfsString("/data/local/tmp/.dragon_thermal.state")?.takeIf { it.contains("STAGE=") }
         var parsedSocTempC: Float? = null
-        if (RootHelper.isRootAvailable) {
+
+        val directEnfPid = readDirectSysfsString("/data/local/tmp/.dragon_enforcer.pid")?.filter { it.isDigit() }
+        if (!directEnfPid.isNullOrBlank()) {
+            try {
+                if (java.io.File("/proc/$directEnfPid").exists()) {
+                    isEnforcerDaemonAlive = true
+                }
+            } catch (_: Exception) {}
+        }
+
+        if (cachedSocZonePath == null) {
+            val confStr = readDirectSysfsString("/data/local/tmp/.dragon_enforcer.conf")
+            if (!confStr.isNullOrBlank()) {
+                val match = Regex("""SOC_ZONE="([^"]+)"""").find(confStr)
+                cachedSocZonePath = match?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
+            }
+        }
+        val directSocRaw = readDirectSysfsLong(
+            if (!cachedSocZonePath.isNullOrBlank()) "${cachedSocZonePath}/temp" else "/sys/class/thermal/thermal_zone0/temp",
+            "/sys/class/kgsl/kgsl-3d0/temp",
+            "/sys/class/thermal/thermal_zone0/temp"
+        )
+        if (directSocRaw != null && directSocRaw > 0L) {
+            val socC = when {
+                directSocRaw > 1500L -> directSocRaw / 1000.0f
+                directSocRaw > 150L -> directSocRaw / 10.0f
+                else -> directSocRaw.toFloat()
+            }
+            if (socC in 20.0f..115.0f) parsedSocTempC = socC
+        }
+
+        val p3DirDirect = if (try { java.io.File("/sys/devices/system/cpu/cpufreq/policy3").exists() } catch (_: Exception) { false }) {
+            "/sys/devices/system/cpu/cpufreq/policy3"
+        } else {
+            "/sys/devices/system/cpu/cpufreq/policy4"
+        }
+        val directC0Cur = readDirectSysfsLong("/sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq", "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "/sys/devices/system/cpu/cpufreq/policy0/cpuinfo_cur_freq")?.toInt()?.takeIf { it in 100_000..4_500_000 }
+        val directC1Cur = readDirectSysfsLong("$p3DirDirect/scaling_cur_freq", "/sys/devices/system/cpu/cpu3/cpufreq/scaling_cur_freq", "$p3DirDirect/cpuinfo_cur_freq")?.toInt()?.takeIf { it in 100_000..4_500_000 }
+        val directC2Cur = readDirectSysfsLong("/sys/devices/system/cpu/cpufreq/policy7/scaling_cur_freq", "/sys/devices/system/cpu/cpu7/cpufreq/scaling_cur_freq", "/sys/devices/system/cpu/cpufreq/policy7/cpuinfo_cur_freq")?.toInt()?.takeIf { it in 100_000..4_500_000 }
+        val directC0Min = readDirectSysfsLong("/sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq")?.toInt()?.takeIf { it in 100_000..4_500_000 }
+        val directC1Min = readDirectSysfsLong("$p3DirDirect/scaling_min_freq")?.toInt()?.takeIf { it in 100_000..4_500_000 }
+        val directC2Min = readDirectSysfsLong("/sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq")?.toInt()?.takeIf { it in 100_000..4_500_000 }
+        val directC0Max = readDirectSysfsLong("/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq")?.toInt()?.takeIf { it in 100_000..4_500_000 }
+        val directC1Max = readDirectSysfsLong("$p3DirDirect/scaling_max_freq")?.toInt()?.takeIf { it in 100_000..4_500_000 }
+        val directC2Max = readDirectSysfsLong("/sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq")?.toInt()?.takeIf { it in 100_000..4_500_000 }
+        val directC0Gov = readDirectSysfsString("/sys/devices/system/cpu/cpufreq/policy0/scaling_governor")
+        val directC1Gov = readDirectSysfsString("$p3DirDirect/scaling_governor")
+        val directC2Gov = readDirectSysfsString("/sys/devices/system/cpu/cpufreq/policy7/scaling_governor")
+
+        if (directC0Cur != null || directC1Cur != null || directC2Cur != null) {
+            val m = sysfsCpuCurKhz.toMutableMap()
+            directC0Cur?.let { m[0] = it }
+            directC1Cur?.let { m[1] = it }
+            directC2Cur?.let { m[2] = it }
+            sysfsCpuCurKhz = m
+        }
+        if (directC0Min != null || directC1Min != null || directC2Min != null) {
+            val m = sysfsCpuMinKhz.toMutableMap()
+            directC0Min?.let { m[0] = it }
+            directC1Min?.let { m[1] = it }
+            directC2Min?.let { m[2] = it }
+            sysfsCpuMinKhz = m
+        }
+        if (directC0Max != null || directC1Max != null || directC2Max != null) {
+            val m = sysfsCpuMaxKhz.toMutableMap()
+            directC0Max?.let { m[0] = it }
+            directC1Max?.let { m[1] = it }
+            directC2Max?.let { m[2] = it }
+            sysfsCpuMaxKhz = m
+        }
+        if (directC0Gov != null || directC1Gov != null || directC2Gov != null) {
+            val m = sysfsCpuGov.toMutableMap()
+            directC0Gov?.let { m[0] = it }
+            directC1Gov?.let { m[1] = it }
+            directC2Gov?.let { m[2] = it }
+            sysfsCpuGov = m
+        }
+
+        val nowElapsedTelemMs = SystemClock.elapsedRealtime()
+        val missingCriticalDirect = (directCurRaw == null || directC0Max == null || directC1Max == null || directC2Max == null)
+        val hasFullDirectTelem = !missingCriticalDirect && parsedThermStateLine != null && parsedSocTempC != null && isEnforcerDaemonAlive
+        val rootPollMinIntervalMs = when {
+            isMainActivityInForeground && missingCriticalDirect -> 2_500L
+            isMainActivityInForeground -> 6_000L
+            hasFullDirectTelem -> 60_000L
+            else -> 45_000L
+        }
+
+        // Only query persistent su pipe when direct reads missed critical nodes or on the low-frequency heartbeat
+        // using mksh built-in `read -r` (zero subshell forks!) so CPU benchmarks & games suffer 0 preemption.
+        if (RootHelper.isRootAvailable && (nowElapsedTelemMs - lastRootTelemetryPollMs >= rootPollMinIntervalMs)) {
+            lastRootTelemetryPollMs = nowElapsedTelemMs
             try {
                 val cmd = """
-                    echo "BATT:$(cat /sys/class/power_supply/battery/status 2>/dev/null):$(cat /sys/class/power_supply/battery/current_now 2>/dev/null):$(cat /sys/class/power_supply/battery/voltage_now 2>/dev/null):$(cat /sys/class/power_supply/battery/temp 2>/dev/null)"
-                    p3_cur=$(cat /sys/devices/system/cpu/cpufreq/policy3/scaling_cur_freq 2>/dev/null || cat /sys/devices/system/cpu/cpufreq/policy4/scaling_cur_freq 2>/dev/null || cat /sys/devices/system/cpu/cpu3/cpufreq/scaling_cur_freq 2>/dev/null)
-                    echo "CLOCKS:$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq 2>/dev/null || cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null):${'$'}p3_cur:$(cat /sys/devices/system/cpu/cpufreq/policy7/scaling_cur_freq 2>/dev/null || cat /sys/devices/system/cpu/cpu7/cpufreq/scaling_cur_freq 2>/dev/null):$(cat /sys/class/kgsl/kgsl-3d0/gpuclk 2>/dev/null || cat /sys/class/kgsl/kgsl-3d0/devfreq/cur_freq 2>/dev/null)"
-                    echo "SOC_TEMP:$(cat /sys/class/kgsl/kgsl-3d0/temp 2>/dev/null || cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)"
-                    echo "THERM_STATE:$(cat /data/local/tmp/.dragon_thermal.state 2>/dev/null)"
+                    read -r bst < /sys/class/power_supply/battery/status 2>/dev/null || bst=""
+                    read -r bcur < /sys/class/power_supply/battery/current_now 2>/dev/null || bcur=""
+                    read -r bvolt < /sys/class/power_supply/battery/voltage_now 2>/dev/null || bvolt=""
+                    read -r btmp < /sys/class/power_supply/battery/temp 2>/dev/null || btmp=""
+                    echo "BATT:${'$'}bst:${'$'}bcur:${'$'}bvolt:${'$'}btmp"
+                    p0_d="/sys/devices/system/cpu/cpufreq/policy0"
+                    p3_d="/sys/devices/system/cpu/cpufreq/policy3"
+                    [ ! -d "${'$'}p3_d" ] && p3_d="/sys/devices/system/cpu/cpufreq/policy4"
+                    p7_d="/sys/devices/system/cpu/cpufreq/policy7"
+                    read -r p0_cur < "${'$'}p0_d/scaling_cur_freq" 2>/dev/null || read -r p0_cur < "${'$'}p0_d/cpuinfo_cur_freq" 2>/dev/null || p0_cur=""
+                    read -r p3_cur < "${'$'}p3_d/scaling_cur_freq" 2>/dev/null || read -r p3_cur < "${'$'}p3_d/cpuinfo_cur_freq" 2>/dev/null || p3_cur=""
+                    read -r p7_cur < "${'$'}p7_d/scaling_cur_freq" 2>/dev/null || read -r p7_cur < "${'$'}p7_d/cpuinfo_cur_freq" 2>/dev/null || p7_cur=""
+                    read -r g_cur < /sys/class/kgsl/kgsl-3d0/gpuclk 2>/dev/null || read -r g_cur < /sys/class/kgsl/kgsl-3d0/devfreq/cur_freq 2>/dev/null || g_cur=""
+                    echo "CLOCKS:${'$'}p0_cur:${'$'}p3_cur:${'$'}p7_cur:${'$'}g_cur"
+                    read -r p0_mn < "${'$'}p0_d/scaling_min_freq" 2>/dev/null || p0_mn=""
+                    read -r p0_mx < "${'$'}p0_d/scaling_max_freq" 2>/dev/null || p0_mx=""
+                    read -r p0_gv < "${'$'}p0_d/scaling_governor" 2>/dev/null || p0_gv=""
+                    echo "CBOUNDS0:${'$'}p0_mn:${'$'}p0_mx:${'$'}p0_gv"
+                    read -r p3_mn < "${'$'}p3_d/scaling_min_freq" 2>/dev/null || p3_mn=""
+                    read -r p3_mx < "${'$'}p3_d/scaling_max_freq" 2>/dev/null || p3_mx=""
+                    read -r p3_gv < "${'$'}p3_d/scaling_governor" 2>/dev/null || p3_gv=""
+                    echo "CBOUNDS1:${'$'}p3_mn:${'$'}p3_mx:${'$'}p3_gv"
+                    read -r p7_mn < "${'$'}p7_d/scaling_min_freq" 2>/dev/null || p7_mn=""
+                    read -r p7_mx < "${'$'}p7_d/scaling_max_freq" 2>/dev/null || p7_mx=""
+                    read -r p7_gv < "${'$'}p7_d/scaling_governor" 2>/dev/null || p7_gv=""
+                    echo "CBOUNDS2:${'$'}p7_mn:${'$'}p7_mx:${'$'}p7_gv"
+                    read -r g_min < /sys/class/kgsl/kgsl-3d0/min_gpuclk 2>/dev/null || read -r g_min < /sys/class/kgsl/kgsl-3d0/devfreq/min_freq 2>/dev/null || g_min=""
+                    read -r g_max < /sys/class/kgsl/kgsl-3d0/max_gpuclk 2>/dev/null || read -r g_max < /sys/class/kgsl/kgsl-3d0/devfreq/max_freq 2>/dev/null || g_max=""
+                    read -r g_gov < /sys/class/kgsl/kgsl-3d0/devfreq/governor 2>/dev/null || g_gov=""
+                    echo "GBOUNDS:${'$'}g_min:${'$'}g_max:${'$'}g_gov"
+                    SOC_ZONE=""
+                    . /data/local/tmp/.dragon_enforcer.conf 2>/dev/null || true
+                    read -r soc_t < "${'$'}SOC_ZONE/temp" 2>/dev/null || read -r soc_t < /sys/class/kgsl/kgsl-3d0/temp 2>/dev/null || read -r soc_t < /sys/class/thermal/thermal_zone0/temp 2>/dev/null || soc_t=""
+                    echo "SOC_TEMP:${'$'}soc_t"
+                    read -r thm_st < /data/local/tmp/.dragon_thermal.state 2>/dev/null || thm_st=""
+                    echo "THERM_STATE:${'$'}thm_st"
+                    read -r enf_pid < /data/local/tmp/.dragon_enforcer.pid 2>/dev/null || enf_pid=""
+                    enf_alive=0
+                    [ -n "${'$'}enf_pid" ] && [ -d "/proc/${'$'}enf_pid" ] && enf_alive=1
+                    echo "ENF_ALIVE:${'$'}enf_alive"
                 """.trimIndent()
                 val res = RootHelper.executeFastTelemetryCommand(cmd)
                 if (res.exitCode == 0 && res.output.isNotBlank()) {
+                    val minMap = sysfsCpuMinKhz.toMutableMap()
+                    val maxMap = sysfsCpuMaxKhz.toMutableMap()
+                    val govMap = sysfsCpuGov.toMutableMap()
                     for (line in res.output.lines()) {
                         val trimmed = line.trim()
                         if (trimmed.startsWith("BATT:")) {
@@ -2233,6 +2673,25 @@ class KernelRepository private constructor(private val context: Context) {
                                 val gMhz = if (gHz > 1_000_000L) (gHz / 1_000_000L).toInt() else if (gHz > 1000L) (gHz / 1000L).toInt() else gHz.toInt()
                                 if (gMhz in 100..1500) sysfsGpuCurMhz = gMhz
                             }
+                        } else if (trimmed.startsWith("CBOUNDS0:") || trimmed.startsWith("CBOUNDS1:") || trimmed.startsWith("CBOUNDS2:")) {
+                            val cid = trimmed[7].digitToIntOrNull() ?: -1
+                            if (cid in 0..2) {
+                                val parts = trimmed.substringAfter(":").split(":")
+                                parts.getOrNull(0)?.trim()?.toIntOrNull()?.takeIf { it in 100_000..4_500_000 }?.let { minMap[cid] = it }
+                                parts.getOrNull(1)?.trim()?.toIntOrNull()?.takeIf { it in 100_000..4_500_000 }?.let { maxMap[cid] = it }
+                                parts.getOrNull(2)?.trim()?.takeIf { it.isNotBlank() }?.let { govMap[cid] = it }
+                            }
+                        } else if (trimmed.startsWith("GBOUNDS:")) {
+                            val parts = trimmed.removePrefix("GBOUNDS:").split(":")
+                            parts.getOrNull(0)?.trim()?.toLongOrNull()?.takeIf { it > 0L }?.let { hz ->
+                                val mhz = if (hz > 1_000_000L) (hz / 1_000_000L).toInt() else if (hz > 1000L) (hz / 1000L).toInt() else hz.toInt()
+                                if (mhz in 100..1500) sysfsGpuMinMhz = mhz
+                            }
+                            parts.getOrNull(1)?.trim()?.toLongOrNull()?.takeIf { it > 0L }?.let { hz ->
+                                val mhz = if (hz > 1_000_000L) (hz / 1_000_000L).toInt() else if (hz > 1000L) (hz / 1000L).toInt() else hz.toInt()
+                                if (mhz in 100..1500) sysfsGpuMaxMhz = mhz
+                            }
+                            parts.getOrNull(2)?.trim()?.takeIf { it.isNotBlank() }?.let { sysfsGpuGov = it }
                         } else if (trimmed.startsWith("SOC_TEMP:")) {
                             val rawSoc = trimmed.removePrefix("SOC_TEMP:").trim().toLongOrNull()
                             if (rawSoc != null && rawSoc > 0L) {
@@ -2246,8 +2705,13 @@ class KernelRepository private constructor(private val context: Context) {
                         } else if (trimmed.startsWith("THERM_STATE:")) {
                             val stVal = trimmed.removePrefix("THERM_STATE:").trim()
                             if (stVal.contains("STAGE=")) parsedThermStateLine = stVal
+                        } else if (trimmed.startsWith("ENF_ALIVE:")) {
+                            isEnforcerDaemonAlive = trimmed.removePrefix("ENF_ALIVE:").trim() == "1"
                         }
                     }
+                    sysfsCpuMinKhz = minMap
+                    sysfsCpuMaxKhz = maxMap
+                    sysfsCpuGov = govMap
                 }
             } catch (_: Exception) {}
         }
@@ -2822,36 +3286,32 @@ class KernelRepository private constructor(private val context: Context) {
             _chargingControlsFlow.value = updatedControls
         }
 
-        // Read real CPU & GPU frequencies on POCO F6 / AOSP ROMs, preserving user CPU/GPU tweaks & active profiles
+        // Read real CPU & GPU frequencies and bounds on POCO F6 / AOSP ROMs
         val activeCust = _activeCustomProfileFlow.value
         val isRomDefaultActive = (activeCust == null && profile == BatteryProfile.DEFAULT)
         val shouldReadRomCpuBounds = isRomDefaultActive && !hasManualCpuTweaks
         val shouldReadRomGpuBounds = isRomDefaultActive && !hasManualGpuTweaks
+        val hasLiveRoot = RootHelper.isRootAvailable
+        var hwClockDriftDetected = false
         val clusterList = _cpuClustersFlow.value.toMutableList()
         val updatedClusters = clusterList.map { c ->
             val firstCore = c.coreIds.firstOrNull() ?: 0
             val altPolicy = if (firstCore == 3) 4 else firstCore
-            val realMinKhz = if (shouldReadRomCpuBounds) {
-                readDirectSysfsLong(
-                    "/sys/devices/system/cpu/cpufreq/policy$firstCore/scaling_min_freq",
-                    "/sys/devices/system/cpu/cpufreq/policy$altPolicy/scaling_min_freq",
-                    "/sys/devices/system/cpu/cpu$firstCore/cpufreq/scaling_min_freq"
-                )?.toInt()?.takeIf { it in 100_000..4_500_000 }
-            } else null
-            val realMaxKhz = if (shouldReadRomCpuBounds) {
-                readDirectSysfsLong(
-                    "/sys/devices/system/cpu/cpufreq/policy$firstCore/scaling_max_freq",
-                    "/sys/devices/system/cpu/cpufreq/policy$altPolicy/scaling_max_freq",
-                    "/sys/devices/system/cpu/cpu$firstCore/cpufreq/scaling_max_freq"
-                )?.toInt()?.takeIf { it in 100_000..4_500_000 }
-            } else null
-            val realGov = if (shouldReadRomCpuBounds) {
-                readDirectSysfsString(
-                    "/sys/devices/system/cpu/cpufreq/policy$firstCore/scaling_governor",
-                    "/sys/devices/system/cpu/cpufreq/policy$altPolicy/scaling_governor",
-                    "/sys/devices/system/cpu/cpu$firstCore/cpufreq/scaling_governor"
-                )
-            } else null
+            val realMinKhz = sysfsCpuMinKhz[c.id] ?: readDirectSysfsLong(
+                "/sys/devices/system/cpu/cpufreq/policy$firstCore/scaling_min_freq",
+                "/sys/devices/system/cpu/cpufreq/policy$altPolicy/scaling_min_freq",
+                "/sys/devices/system/cpu/cpu$firstCore/cpufreq/scaling_min_freq"
+            )?.toInt()?.takeIf { it in 100_000..4_500_000 }
+            val realMaxKhz = sysfsCpuMaxKhz[c.id] ?: readDirectSysfsLong(
+                "/sys/devices/system/cpu/cpufreq/policy$firstCore/scaling_max_freq",
+                "/sys/devices/system/cpu/cpufreq/policy$altPolicy/scaling_max_freq",
+                "/sys/devices/system/cpu/cpu$firstCore/cpufreq/scaling_max_freq"
+            )?.toInt()?.takeIf { it in 100_000..4_500_000 }
+            val realGov = sysfsCpuGov[c.id] ?: readDirectSysfsString(
+                "/sys/devices/system/cpu/cpufreq/policy$firstCore/scaling_governor",
+                "/sys/devices/system/cpu/cpufreq/policy$altPolicy/scaling_governor",
+                "/sys/devices/system/cpu/cpu$firstCore/cpufreq/scaling_governor"
+            )
 
             val targetProfileMin = when (c.id) {
                 0 -> activeCust?.silverMinFreqKhz ?: profile.minCpuFreqSilverKhz
@@ -2865,47 +3325,66 @@ class KernelRepository private constructor(private val context: Context) {
                 2 -> activeCust?.primeMaxFreqKhz ?: profile.maxCpuFreqPrimeKhz
                 else -> c.maxFreqKhz
             }
-            val targetGov = if (activeCust != null) activeCust.governor else "schedutil"
+            val targetGov = if (activeCust != null) activeCust.governor else if (profile == BatteryProfile.GAMING) "walt" else "schedutil"
 
-            val effectiveMin = if (shouldReadRomCpuBounds) {
-                realMinKhz ?: c.minFreqKhz
-            } else if (!hasManualCpuTweaks) {
-                targetProfileMin
-            } else {
-                c.minFreqKhz
+            val expectedMinKhz = lastEnforcedCpuMinKhz[c.id] ?: targetProfileMin
+            val expectedMaxKhz = lastEnforcedCpuMaxKhz[c.id] ?: targetProfileMax
+            val minTolKhz = if (lastEnforcedCpuMinKhz[c.id] != null) 25_000 else 130_000
+            val maxTolKhz = if (lastEnforcedCpuMaxKhz[c.id] != null) 25_000 else 100_000
+
+            if (hasLiveRoot && !isRomDefaultActive && !hasManualCpuTweaks && isEnforcerDaemonAlive) {
+                val rMin = realMinKhz
+                val rMax = realMaxKhz
+                if (rMin != null && kotlin.math.abs(rMin - expectedMinKhz) > minTolKhz) {
+                    hwClockDriftDetected = true
+                }
+                if (rMax != null) {
+                    if (profile.isUncapped && activeCust == null) {
+                        if (rMax < expectedMaxKhz - maxTolKhz) {
+                            hwClockDriftDetected = true
+                        }
+                    } else if (kotlin.math.abs(rMax - expectedMaxKhz) > maxTolKhz) {
+                        hwClockDriftDetected = true
+                    }
+                }
+                val isDynTarget = (targetGov == "walt" || targetGov == "schedutil")
+                val isDynReal = (realGov == "walt" || realGov == "schedutil")
+                if (realGov != null && ((isDynTarget && !isDynReal) || (!isDynTarget && realGov != targetGov))) {
+                    hwClockDriftDetected = true
+                }
             }
 
-            val effectiveMax = if (shouldReadRomCpuBounds) {
-                realMaxKhz ?: c.maxFreqKhz
-            } else if (!hasManualCpuTweaks) {
-                targetProfileMax
-            } else {
-                c.maxFreqKhz
+            val effectiveMin = when {
+                shouldReadRomCpuBounds -> realMinKhz ?: c.minFreqKhz
+                hasLiveRoot && realMinKhz != null -> realMinKhz
+                !hasManualCpuTweaks -> targetProfileMin
+                else -> c.minFreqKhz
             }
 
-            val effectiveGov = if (shouldReadRomCpuBounds) {
-                realGov ?: c.governor
-            } else if (!hasManualCpuTweaks) {
-                targetGov
-            } else {
-                c.governor
+            val effectiveMax = when {
+                shouldReadRomCpuBounds -> realMaxKhz ?: c.maxFreqKhz
+                hasLiveRoot && realMaxKhz != null -> realMaxKhz
+                !hasManualCpuTweaks -> targetProfileMax
+                else -> c.maxFreqKhz
             }
 
-            val realCurKhz = readDirectSysfsLong(
+            val effectiveGov = when {
+                shouldReadRomCpuBounds -> realGov ?: c.governor
+                hasLiveRoot && realGov != null -> realGov
+                !hasManualCpuTweaks -> targetGov
+                else -> c.governor
+            }
+
+            val realCurKhz = sysfsCpuCurKhz[c.id] ?: readDirectSysfsLong(
                 "/sys/devices/system/cpu/cpu$firstCore/cpufreq/scaling_cur_freq",
                 "/sys/devices/system/cpu/cpufreq/policy$firstCore/scaling_cur_freq",
                 "/sys/devices/system/cpu/cpufreq/policy$altPolicy/scaling_cur_freq",
                 "/sys/devices/system/cpu/cpu$firstCore/cpufreq/cpuinfo_cur_freq",
                 "/sys/devices/system/cpu/cpufreq/policy$firstCore/cpuinfo_cur_freq"
-            )?.toInt()?.takeIf { it in 100_000..4_500_000 } ?: sysfsCpuCurKhz[c.id]
+            )?.toInt()?.takeIf { it in 100_000..4_500_000 }
 
             val fallbackKhz = c.curFreqKhz.coerceIn(effectiveMin, max(effectiveMin, effectiveMax))
-            val rawFreq = realCurKhz ?: fallbackKhz
-            val freq = if (!shouldReadRomCpuBounds) {
-                rawFreq.coerceIn(effectiveMin, max(effectiveMin, effectiveMax))
-            } else {
-                rawFreq
-            }
+            val freq = realCurKhz ?: fallbackKhz
             c.copy(
                 curFreqKhz = freq,
                 minFreqKhz = effectiveMin,
@@ -2936,58 +3415,63 @@ class KernelRepository private constructor(private val context: Context) {
         val avgLoad = cores.map { it.loadPercent }.average().toInt()
         _cpuLoadFlow.value = avgLoad
 
-        // Update GPU clock (and when ROM's Default is active without manual GPU tweaks, sync live ROM GPU min/max/governor)
+        // Update GPU clock (and sync live kernel GPU min/max/governor)
         val realGpuHz = readDirectSysfsLong(
             "/sys/class/kgsl/kgsl-3d0/gpuclk",
             "/sys/class/kgsl/kgsl-3d0/devfreq/cur_freq"
         )
-        val realGpuMhz = realGpuHz?.let { hz ->
+        val realGpuMhz = sysfsGpuCurMhz ?: realGpuHz?.let { hz ->
             if (hz > 1_000_000L) (hz / 1_000_000L).toInt() else if (hz > 1000L) (hz / 1000L).toInt() else hz.toInt()
-        }?.takeIf { it in 100..1500 } ?: sysfsGpuCurMhz
+        }?.takeIf { it in 100..1500 }
 
-        val realGpuMinMhz = if (shouldReadRomGpuBounds) {
-            readDirectSysfsLong(
-                "/sys/class/kgsl/kgsl-3d0/devfreq/min_freq",
-                "/sys/class/kgsl/kgsl-3d0/min_gpuclk"
-            )?.let { hz ->
-                if (hz > 1_000_000L) (hz / 1_000_000L).toInt() else if (hz > 1000L) (hz / 1000L).toInt() else hz.toInt()
-            }?.takeIf { it in 100..1500 }
-        } else null
+        val realGpuMinMhz = sysfsGpuMinMhz ?: readDirectSysfsLong(
+            "/sys/class/kgsl/kgsl-3d0/min_gpuclk",
+            "/sys/class/kgsl/kgsl-3d0/devfreq/min_freq"
+        )?.let { hz ->
+            if (hz > 1_000_000L) (hz / 1_000_000L).toInt() else if (hz > 1000L) (hz / 1000L).toInt() else hz.toInt()
+        }?.takeIf { it in 100..1500 }
 
-        val realGpuMaxMhz = if (shouldReadRomGpuBounds) {
-            readDirectSysfsLong(
-                "/sys/class/kgsl/kgsl-3d0/devfreq/max_freq",
-                "/sys/class/kgsl/kgsl-3d0/max_gpuclk"
-            )?.let { hz ->
-                if (hz > 1_000_000L) (hz / 1_000_000L).toInt() else if (hz > 1000L) (hz / 1000L).toInt() else hz.toInt()
-            }?.takeIf { it in 100..1500 }
-        } else null
+        val realGpuMaxMhz = sysfsGpuMaxMhz ?: readDirectSysfsLong(
+            "/sys/class/kgsl/kgsl-3d0/max_gpuclk",
+            "/sys/class/kgsl/kgsl-3d0/devfreq/max_freq"
+        )?.let { hz ->
+            if (hz > 1_000_000L) (hz / 1_000_000L).toInt() else if (hz > 1000L) (hz / 1000L).toInt() else hz.toInt()
+        }?.takeIf { it in 100..1500 }
 
-        val realGpuGov = if (shouldReadRomGpuBounds) {
-            readDirectSysfsString("/sys/class/kgsl/kgsl-3d0/devfreq/governor")
-        } else null
+        val realGpuGov = sysfsGpuGov ?: readDirectSysfsString("/sys/class/kgsl/kgsl-3d0/devfreq/governor")
 
-        val effectiveGpuMin = if (shouldReadRomGpuBounds) {
-            realGpuMinMhz ?: _gpuConfigFlow.value.minFreqMhz
-        } else if (!hasManualGpuTweaks) {
-            activeCust?.gpuMinFreqMhz ?: profile.minGpuFreqMhz
-        } else {
-            _gpuConfigFlow.value.minFreqMhz
+        val targetGpuMin = lastEnforcedGpuMinMhz ?: (activeCust?.gpuMinFreqMhz ?: profile.minGpuFreqMhz)
+        val targetGpuMax = lastEnforcedGpuMaxMhz ?: (activeCust?.gpuMaxFreqMhz ?: profile.maxGpuFreqMhz)
+        val gpuTolMhz = if (lastEnforcedGpuMinMhz != null && lastEnforcedGpuMaxMhz != null) 25 else 65
+        if (hasLiveRoot && !isRomDefaultActive && !hasManualGpuTweaks && isEnforcerDaemonAlive) {
+            if (realGpuMinMhz != null && kotlin.math.abs(realGpuMinMhz - targetGpuMin) > gpuTolMhz) {
+                hwClockDriftDetected = true
+            }
+            if (realGpuMaxMhz != null) {
+                if (profile.isUncapped && activeCust == null) {
+                    if (realGpuMaxMhz < 900) {
+                        hwClockDriftDetected = true
+                    }
+                } else if (kotlin.math.abs(realGpuMaxMhz - targetGpuMax) > gpuTolMhz) {
+                    hwClockDriftDetected = true
+                }
+            }
         }
-        val effectiveGpuMax = if (shouldReadRomGpuBounds) {
-            realGpuMaxMhz ?: _gpuConfigFlow.value.maxFreqMhz
-        } else if (!hasManualGpuTweaks) {
-            activeCust?.gpuMaxFreqMhz ?: profile.maxGpuFreqMhz
-        } else {
-            _gpuConfigFlow.value.maxFreqMhz
+
+        val effectiveGpuMin = when {
+            shouldReadRomGpuBounds -> realGpuMinMhz ?: _gpuConfigFlow.value.minFreqMhz
+            hasLiveRoot && realGpuMinMhz != null -> realGpuMinMhz
+            !hasManualGpuTweaks -> targetGpuMin
+            else -> _gpuConfigFlow.value.minFreqMhz
+        }
+        val effectiveGpuMax = when {
+            shouldReadRomGpuBounds -> realGpuMaxMhz ?: _gpuConfigFlow.value.maxFreqMhz
+            hasLiveRoot && realGpuMaxMhz != null -> realGpuMaxMhz
+            !hasManualGpuTweaks -> targetGpuMax
+            else -> _gpuConfigFlow.value.maxFreqMhz
         }
         val fallbackGpuMhz = _gpuConfigFlow.value.curFreqMhz.coerceIn(effectiveGpuMin, max(effectiveGpuMin, effectiveGpuMax))
-        val rawGpuFreq = realGpuMhz ?: fallbackGpuMhz
-        val gpuFreq = if (!shouldReadRomGpuBounds) {
-            rawGpuFreq.coerceIn(effectiveGpuMin, max(effectiveGpuMin, effectiveGpuMax))
-        } else {
-            rawGpuFreq
-        }
+        val gpuFreq = realGpuMhz ?: fallbackGpuMhz
         val gpuFreqRatioPct = ((gpuFreq.toDouble() / 1100.0) * 100.0).roundToInt().coerceIn(8, 98)
         _gpuConfigFlow.value = _gpuConfigFlow.value.copy(
             curFreqMhz = gpuFreq,
@@ -3004,10 +3488,30 @@ class KernelRepository private constructor(private val context: Context) {
 
         // Sync live Root Thermal Throttling state with active Battery Profile (or ROM Default passthrough)
         val curThermCfg = _thermalControlFlow.value
+        val directGpuTempRaw = readDirectSysfsLong("/sys/class/kgsl/kgsl-3d0/temp")
+        val realGpuTempC = when {
+            directGpuTempRaw != null && directGpuTempRaw in 20_000L..115_000L -> directGpuTempRaw / 1000.0f
+            directGpuTempRaw != null && directGpuTempRaw in 200L..1150L -> directGpuTempRaw / 10.0f
+            directGpuTempRaw != null && directGpuTempRaw in 20L..115L -> directGpuTempRaw.toFloat()
+            else -> null
+        }
+        val liveGpuTempC = realGpuTempC ?: (cpuTemp - 1.2f).coerceAtLeast(baseBatTemp)
+        var parsedVs0C: Float? = null
+        if (!parsedThermStateLine.isNullOrBlank()) {
+            for (kv in parsedThermStateLine.split("|")) {
+                if (kv.startsWith("VS0=")) {
+                    kv.removePrefix("VS0=").toIntOrNull()?.let { mc ->
+                        if (mc in 1000..120000) parsedVs0C = mc / 1000.0f
+                    }
+                }
+            }
+        }
         val isDragonGaming = (profile == BatteryProfile.GAMING && activeCust == null)
+        val isPeakTgame = (profile == BatteryProfile.PERFORMANCE && activeCust == null)
         val effLimitC = when {
             isRomDefaultActive -> 0.0f
             isDragonGaming -> 0.0f
+            isPeakTgame -> 45.0f
             curThermCfg.syncWithBatteryProfiler -> activeCust?.thermalLimitC ?: profile.thermalLimitC
             else -> curThermCfg.customThermalLimitC
         }
@@ -3023,24 +3527,25 @@ class KernelRepository private constructor(private val context: Context) {
                 enforcedGoldMaxKhz = updatedClusters.find { it.id == 1 }?.maxFreqKhz ?: 2800000,
                 enforcedSilverMaxKhz = updatedClusters.find { it.id == 0 }?.maxFreqKhz ?: 2016000,
                 enforcedGpuMaxMhz = effectiveGpuMax,
-                liveSocTempC = cpuTemp
+                liveBatteryTempC = baseBatTemp,
+                liveSocTempC = cpuTemp,
+                liveGpuTempC = liveGpuTempC,
+                liveVirtualTempC = parsedVs0C ?: (baseBatTemp + 5.0f)
             )
         } else {
-            var liveStage = if (isDragonGaming) 0 else curThermCfg.currentThrottleStage
-            var enfP0Max = if (isDragonGaming) 2016000 else (updatedClusters.find { it.id == 0 }?.maxFreqKhz ?: profile.maxCpuFreqSilverKhz)
-            var enfP3Max = if (isDragonGaming) 2800000 else (updatedClusters.find { it.id == 1 }?.maxFreqKhz ?: profile.maxCpuFreqGoldKhz)
-            var enfP7Max = if (isDragonGaming) 3014400 else (updatedClusters.find { it.id == 2 }?.maxFreqKhz ?: profile.maxCpuFreqPrimeKhz)
-            var enfGMaxMhz = if (isDragonGaming) 1100 else effectiveGpuMax
-            if (isDragonGaming) {
-                liveStage = 0
-                enfP0Max = 2016000
-                enfP3Max = 2800000
-                enfP7Max = 3014400
-                enfGMaxMhz = 1100
-            } else if (!parsedThermStateLine.isNullOrBlank()) {
+            var liveStage = 0
+            var liveVs0C: Float? = parsedVs0C
+            var enfP0Max = if (isDragonGaming || isPeakTgame) 2016000 else (updatedClusters.find { it.id == 0 }?.maxFreqKhz ?: profile.maxCpuFreqSilverKhz)
+            var enfP3Max = if (isDragonGaming || isPeakTgame) 2803200 else (updatedClusters.find { it.id == 1 }?.maxFreqKhz ?: profile.maxCpuFreqGoldKhz)
+            var enfP7Max = if (isDragonGaming || isPeakTgame) 3014400 else (updatedClusters.find { it.id == 2 }?.maxFreqKhz ?: profile.maxCpuFreqPrimeKhz)
+            var enfGMaxMhz = if (isDragonGaming) 1100 else if (isPeakTgame) 1000 else effectiveGpuMax
+            if (!parsedThermStateLine.isNullOrBlank()) {
                 for (kv in parsedThermStateLine.split("|")) {
                     when {
-                        kv.startsWith("STAGE=") -> kv.removePrefix("STAGE=").toIntOrNull()?.let { liveStage = it.coerceIn(0, 3) }
+                        kv.startsWith("STAGE=") -> kv.removePrefix("STAGE=").toIntOrNull()?.let { liveStage = it.coerceIn(0, 5) }
+                        kv.startsWith("VS0=") -> kv.removePrefix("VS0=").toIntOrNull()?.let { mc ->
+                            if (mc in 1000..120000) liveVs0C = mc / 1000.0f
+                        }
                         kv.startsWith("P0_MAX=") -> kv.removePrefix("P0_MAX=").toIntOrNull()?.takeIf { it in 300_000..4_500_000 }?.let { enfP0Max = it }
                         kv.startsWith("P3_MAX=") -> kv.removePrefix("P3_MAX=").toIntOrNull()?.takeIf { it in 300_000..4_500_000 }?.let { enfP3Max = it }
                         kv.startsWith("P7_MAX=") -> kv.removePrefix("P7_MAX=").toIntOrNull()?.takeIf { it in 300_000..4_500_000 }?.let { enfP7Max = it }
@@ -3050,23 +3555,27 @@ class KernelRepository private constructor(private val context: Context) {
                         }
                     }
                 }
-            } else {
+            } else if (!isDragonGaming && !isPeakTgame) {
                 val trigC = effLimitC + (curThermCfg.policy.triggerOffsetDeciC / 10.0f)
-                val effSensorC = if (curThermCfg.sensorSource == ThermalSensorSource.SMART_DUAL_SENSOR && cpuTemp >= 90.0f) {
-                    trigC + 1.5f // Emergency Silicon Safety Guard only above 90.0°C Tj
+                val effSocC = activeCust?.socThermalLimitC ?: profile.socThermalLimitC
+                val effGpuC = activeCust?.gpuThermalLimitC ?: profile.gpuThermalLimitC
+                val batOver = baseBatTemp - trigC
+                val dualOver = if (curThermCfg.sensorSource == ThermalSensorSource.SMART_DUAL_SENSOR && effSocC > 0f && effGpuC > 0f) {
+                    maxOf(cpuTemp - effSocC, liveGpuTempC - effGpuC)
                 } else {
-                    baseBatTemp
+                    -99.0f
                 }
+                val worstOver = maxOf(batOver, dualOver)
                 liveStage = when {
-                    effSensorC >= trigC + 2.5f -> 3
-                    effSensorC >= trigC + 1.0f -> 2
-                    effSensorC >= trigC -> 1
+                    worstOver >= 2.5f -> 3
+                    worstOver >= 1.0f -> 2
+                    worstOver >= 0.0f -> 1
                     else -> 0
                 }
             }
 
-            // Reflect throttled ceiling and profile min/max bounds in CPU & GPU flows when an app profile is active
-            if (!hasManualCpuTweaks) {
+            // When root has not reported live bounds, fall back to profile bounds; otherwise keep true sysfs readback
+            if (!hasManualCpuTweaks && (!hasLiveRoot || sysfsCpuMaxKhz.isEmpty())) {
                 _cpuClustersFlow.value = _cpuClustersFlow.value.map { c ->
                     val minKhz = when (c.id) {
                         0 -> activeCust?.silverMinFreqKhz ?: profile.minCpuFreqSilverKhz
@@ -3087,7 +3596,7 @@ class KernelRepository private constructor(private val context: Context) {
                     )
                 }
             }
-            if (!hasManualGpuTweaks) {
+            if (!hasManualGpuTweaks && (!hasLiveRoot || sysfsGpuMaxMhz == null)) {
                 val minMhz = activeCust?.gpuMinFreqMhz ?: profile.minGpuFreqMhz
                 _gpuConfigFlow.value = _gpuConfigFlow.value.copy(
                     minFreqMhz = minMhz,
@@ -3098,27 +3607,48 @@ class KernelRepository private constructor(private val context: Context) {
 
             val profTitle = activeCust?.title ?: profile.title
             val syncPrefix = if (curThermCfg.syncWithBatteryProfiler) "Synced: $profTitle" else "Custom Override"
+            val dualSuffix = if (curThermCfg.sensorSource == ThermalSensorSource.SMART_DUAL_SENSOR) " + SoC Guard" else ""
+            val shedSuffix = if (curThermCfg.backgroundThermalShedding && liveStage > 0) " • BG Shedding" else ""
             val statusStr = when {
-                isDragonGaming -> "Dragon Gaming Active • Throttleless Max Performance • Dynamic Scaling up to 3014/2800/2016 MHz & GPU 1100 MHz (No Thermal Limits)"
+                isDragonGaming && liveStage == 0 -> String.format(
+                    java.util.Locale.US,
+                    "Dragon Gaming Active • INDIA-NOLIMITS (%.1f°C Virtual < 54°C) • Full %d/%d/%d MHz & GPU %d MHz",
+                    liveVs0C ?: baseBatTemp, enfP7Max / 1000, enfP3Max / 1000, enfP0Max / 1000, enfGMaxMhz
+                )
+                isDragonGaming -> String.format(
+                    java.util.Locale.US,
+                    "INDIA-NOLIMITS STAGE %d (%.1f°C Virtual) • Clamped %d/%d/%d MHz & GPU %d MHz",
+                    liveStage, liveVs0C ?: baseBatTemp, enfP7Max / 1000, enfP3Max / 1000, enfP0Max / 1000, enfGMaxMhz
+                )
+                isPeakTgame && liveStage == 0 -> String.format(
+                    java.util.Locale.US,
+                    "Peak Performance Active • INDIA-TGAME (%.1f°C Virtual < 45°C) • Full %d/%d/%d MHz & GPU %d MHz",
+                    liveVs0C ?: baseBatTemp, enfP7Max / 1000, enfP3Max / 1000, enfP0Max / 1000, enfGMaxMhz
+                )
+                isPeakTgame -> String.format(
+                    java.util.Locale.US,
+                    "INDIA-TGAME STAGE %d (%.1f°C Virtual) • Clamped %d/%d/%d MHz & GPU %d MHz",
+                    liveStage, liveVs0C ?: baseBatTemp, enfP7Max / 1000, enfP3Max / 1000, enfP0Max / 1000, enfGMaxMhz
+                )
                 liveStage == 0 -> String.format(
                     java.util.Locale.US,
-                    "%s (%.1f°C Limit) • Stage 0 Unthrottled • Full %d/%d/%d MHz & GPU %d MHz",
-                    syncPrefix, effLimitC, enfP7Max / 1000, enfP3Max / 1000, enfP0Max / 1000, enfGMaxMhz
+                    "%s (%.1f°C%s) • Stage 0 Unthrottled • Full %d/%d/%d MHz & GPU %d MHz",
+                    syncPrefix, effLimitC, dualSuffix, enfP7Max / 1000, enfP3Max / 1000, enfP0Max / 1000, enfGMaxMhz
                 )
                 liveStage == 1 -> String.format(
                     java.util.Locale.US,
-                    "STAGE 1 THROTTLE (-%d%% @ %.1f°C) • Clamped to %d/%d/%d MHz & GPU %d MHz",
-                    curThermCfg.policy.stage1DropPct, baseBatTemp, enfP7Max / 1000, enfP3Max / 1000, enfP0Max / 1000, enfGMaxMhz
+                    "STAGE 1 THROTTLE (-%d%% @ %.1f°C BAT / %.0f°C SoC%s) • Clamped %d/%d/%d MHz & GPU %d MHz",
+                    curThermCfg.policy.stage1DropPct, baseBatTemp, cpuTemp, shedSuffix, enfP7Max / 1000, enfP3Max / 1000, enfP0Max / 1000, enfGMaxMhz
                 )
                 liveStage == 2 -> String.format(
                     java.util.Locale.US,
-                    "STAGE 2 THROTTLE (-%d%% @ %.1f°C) • Clamped to %d/%d/%d MHz & GPU %d MHz",
-                    curThermCfg.policy.stage2DropPct, baseBatTemp, enfP7Max / 1000, enfP3Max / 1000, enfP0Max / 1000, enfGMaxMhz
+                    "STAGE 2 THROTTLE (-%d%% @ %.1f°C BAT / %.0f°C SoC%s) • Clamped %d/%d/%d MHz & GPU %d MHz",
+                    curThermCfg.policy.stage2DropPct, baseBatTemp, cpuTemp, shedSuffix, enfP7Max / 1000, enfP3Max / 1000, enfP0Max / 1000, enfGMaxMhz
                 )
                 else -> String.format(
                     java.util.Locale.US,
-                    "STAGE 3 PROTECT (-%d%% @ %.1f°C) • Clamped to %d/%d/%d MHz & GPU %d MHz",
-                    curThermCfg.policy.stage3DropPct, baseBatTemp, enfP7Max / 1000, enfP3Max / 1000, enfP0Max / 1000, enfGMaxMhz
+                    "STAGE 3 PROTECT (-%d%% @ %.1f°C BAT / %.0f°C SoC%s) • Clamped %d/%d/%d MHz & GPU %d MHz",
+                    curThermCfg.policy.stage3DropPct, baseBatTemp, cpuTemp, shedSuffix, enfP7Max / 1000, enfP3Max / 1000, enfP0Max / 1000, enfGMaxMhz
                 )
             }
             _thermalControlFlow.value = curThermCfg.copy(
@@ -3132,21 +3662,49 @@ class KernelRepository private constructor(private val context: Context) {
                 enforcedGoldMaxKhz = enfP3Max,
                 enforcedSilverMaxKhz = enfP0Max,
                 enforcedGpuMaxMhz = enfGMaxMhz,
-                liveSocTempC = cpuTemp
+                liveBatteryTempC = baseBatTemp,
+                liveSocTempC = cpuTemp,
+                liveGpuTempC = liveGpuTempC,
+                liveVirtualTempC = liveVs0C ?: (baseBatTemp + 5.0f)
             )
+            val enfMaxUpdate = lastEnforcedCpuMaxKhz.toMutableMap()
+            enfMaxUpdate[0] = enfP0Max
+            enfMaxUpdate[1] = enfP3Max
+            enfMaxUpdate[2] = enfP7Max
+            lastEnforcedCpuMaxKhz = enfMaxUpdate
+            lastEnforcedGpuMaxMhz = enfGMaxMhz
+            if (liveStage > 0) {
+                hwClockDriftDetected = false
+            }
         }
 
         // Periodically re-enforce active AOSP charging/thermal rules while charging
         enforceActiveChargingRulesAsync(forceImmediate = false)
 
-        // Periodically re-enforce active App Battery Profile and/or manual CPU & GPU tweaks against ROM PowerHAL resets
-        enforceActivePerformanceRulesAsync()
+        // When .dragon_enforcer.sh is alive in kernel space, NEVER kill and restart it from Java drift checks —
+        // .dragon_enforcer.sh already monitors and repairs cpufreq/gpuclk/msm_performance every 2s with zero forks!
+        if (hwClockDriftDetected && !isEnforcerDaemonAlive) {
+            consecutiveDriftCount++
+        } else {
+            consecutiveDriftCount = 0
+        }
+        val shouldRecoverDrift = !isEnforcerDaemonAlive && (consecutiveDriftCount >= 2) && (SystemClock.elapsedRealtime() - lastPerformanceEnforcementMs >= 15_000L)
+        val shouldRestartDeadEnforcer = !isEnforcerDaemonAlive && !hasManualCpuTweaks && !hasManualGpuTweaks &&
+                (_activeCustomProfileFlow.value != null || _activeProfileFlow.value != BatteryProfile.DEFAULT) &&
+                (SystemClock.elapsedRealtime() - lastPerformanceEnforcementMs >= 12_000L)
+        enforceActivePerformanceRulesAsync(forceImmediate = shouldRecoverDrift || shouldRestartDeadEnforcer)
 
-        // Update live RAM, zRAM, and GPU VRAM telemetry in-process from /proc/meminfo, ActivityManager, and readable sysfs
-        refreshDeviceRamAndVramTelemetrySync()
+        // Update live RAM, zRAM, and GPU VRAM telemetry only when foreground or on a 30s background cadence
+        val nowRamCheckMs = SystemClock.elapsedRealtime()
+        if (isMainActivityInForeground || nowRamCheckMs - lastRamTelemetrySyncMs >= 30_000L) {
+            lastRamTelemetrySyncMs = nowRamCheckMs
+            refreshDeviceRamAndVramTelemetrySync()
+        }
 
-        // Update live FrameGen performance telemetry & intelligent guardrails
-        updateFrameGenTelemetrySync()
+        // Update live FrameGen performance telemetry only when needed
+        if (isMainActivityInForeground || _frameGenConfigFlow.value.let { it.isEnabled || it.autoActivateForGames || it.floatingWindowPreviewActive }) {
+            updateFrameGenTelemetrySync()
+        }
     }
 
     private fun buildAllCoresMaxMap(clusters: List<CpuCluster> = _cpuClustersFlow.value): String {
@@ -3159,11 +3717,18 @@ class KernelRepository private constructor(private val context: Context) {
 
     private fun enforceActivePerformanceRulesAsync(forceImmediate: Boolean = false) {
         val nowMs = SystemClock.elapsedRealtime()
-        if (!forceImmediate && nowMs - lastPerformanceEnforcementMs < 30_000L) return
         val activeCustom = _activeCustomProfileFlow.value
         val activeProfile = _activeProfileFlow.value
         val isAppProfileActive = (activeCustom != null || activeProfile != BatteryProfile.DEFAULT)
         if (!isAppProfileActive && !hasManualCpuTweaks && !hasManualGpuTweaks) return
+
+        // When .dragon_enforcer.sh is already running cleanly in kernel space every 1.5s, DO NOT kill and
+        // re-execute enforceAppBatteryProfile() every 30s — doing so momentarily unlocks msm_performance/cpufreq
+        // and resets thermal hysteresis state, causing periodic 30s frame drops and sawtooth frequency spikes.
+        if (isAppProfileActive && !hasManualCpuTweaks && !hasManualGpuTweaks && !forceImmediate && isEnforcerDaemonAlive) {
+            return
+        }
+        if (!forceImmediate && nowMs - lastPerformanceEnforcementMs < 30_000L) return
         lastPerformanceEnforcementMs = nowMs
 
         scope.launch {
@@ -3175,18 +3740,23 @@ class KernelRepository private constructor(private val context: Context) {
             val c2 = clusters.find { it.id == 2 } ?: c1
 
             if (isAppProfileActive && !hasManualCpuTweaks && !hasManualGpuTweaks) {
-                val isPerf = (activeCustom?.governor == "performance") ||
-                        (activeCustom == null && (activeProfile == BatteryProfile.GAMING || activeProfile == BatteryProfile.PERFORMANCE))
+                val isPerf = if (activeCustom != null) {
+                    activeCustom.governor == "performance" || activeCustom.latencySensitive || activeCustom.uclampTopMinPct >= 22
+                } else {
+                    (activeProfile == BatteryProfile.GAMING || activeProfile == BatteryProfile.PERFORMANCE)
+                }
                 val isSave = (activeCustom?.governor == "powersave") ||
                         (activeCustom == null && activeProfile == BatteryProfile.POWER_SAVING)
-                val boostVal = if (activeCustom != null) {
-                    if (isPerf) 3 else if (isSave) 0 else 1
-                } else {
-                    activeProfile.adrenoBoostVal
-                }
+                val boostVal = activeCustom?.adrenoBoostVal ?: activeProfile.adrenoBoostVal
                 val boostCfg = _adrenoCpuBoostFlow.value
                 val tCfg = _thermalControlFlow.value
                 val isDragonGaming = (activeCustom == null && activeProfile == BatteryProfile.GAMING)
+                val isPeakTgame = (activeCustom == null && activeProfile == BatteryProfile.PERFORMANCE)
+                val thermalTableMode = when {
+                    isDragonGaming -> "INDIA_NOLIMITS"
+                    isPeakTgame -> "INDIA_TGAME"
+                    else -> "STANDARD"
+                }
                 val profileLimit = if (isDragonGaming) 0.0f else (activeCustom?.thermalLimitC ?: activeProfile.thermalLimitC)
                 val profileSocLimit = if (isDragonGaming) 0.0f else (activeCustom?.socThermalLimitC ?: activeProfile.socThermalLimitC)
                 val profileGpuLimit = if (isDragonGaming) 0.0f else (activeCustom?.gpuThermalLimitC ?: activeProfile.gpuThermalLimitC)
@@ -3200,46 +3770,63 @@ class KernelRepository private constructor(private val context: Context) {
                 val basePrimeMax = activeCustom?.primeMaxFreqKhz ?: activeProfile.maxCpuFreqPrimeKhz
                 val baseGpuMin = activeCustom?.gpuMinFreqMhz ?: activeProfile.minGpuFreqMhz
                 val baseGpuMax = activeCustom?.gpuMaxFreqMhz ?: activeProfile.maxGpuFreqMhz
+                val silverBoostKhz = if (activeCustom != null) baseSilverMax else boostCfg.boostFreqSilverKhz
+                val goldBoostKhz = if (activeCustom != null) baseGoldMax else boostCfg.boostFreqGoldKhz
                 val primeBoostKhz = if (activeCustom != null) basePrimeMax else activeProfile.cpuBoostPrimeKhz
+                val targetCpuGov = activeCustom?.governor
+                    ?: if (isDragonGaming) "walt" else "schedutil"
+                val targetGpuGov = (activeCustom?.gpuGovernor ?: gpu.governor).ifBlank { "msm-adreno-tz" }
                 val res = RootHelper.enforceAppBatteryProfile(
-                    cpuGov = c2.governor,
+                    cpuGov = targetCpuGov,
                     silverMinKhz = baseSilverMin,
                     silverMaxKhz = baseSilverMax,
                     goldMinKhz = baseGoldMin,
                     goldMaxKhz = baseGoldMax,
                     primeMinKhz = basePrimeMin,
                     primeMaxKhz = basePrimeMax,
-                    gpuGov = gpu.governor,
+                    gpuGov = targetGpuGov,
                     gpuMinMhz = baseGpuMin,
                     gpuMaxMhz = baseGpuMax,
                     adrenoBoostVal = boostVal,
                     isGamingOrPerf = isPerf,
                     isPowerSaving = isSave,
-                    profileMode = activeProfile.name,
+                    profileMode = if (activeCustom != null) {
+                        if (isPerf) "PERFORMANCE" else if (isSave) "POWER_SAVING" else "BALANCED"
+                    } else activeProfile.name,
+                    thermalTableMode = thermalTableMode,
                     isUncapped = isUncappedMode,
                     thermalLimitC = effThermalLimit,
                     socLimitC = profileSocLimit,
                     gpuLimitC = profileGpuLimit,
-                    cpuBoostEnabled = boostCfg.isEnabled,
-                    inputBoostEnabled = boostCfg.inputBoostEnabled,
-                    cpuBoostSilverKhz = boostCfg.boostFreqSilverKhz,
-                    cpuBoostGoldKhz = boostCfg.boostFreqGoldKhz,
+                    cpuBoostEnabled = activeCustom?.cpuBoostEnabled ?: boostCfg.isEnabled,
+                    inputBoostEnabled = activeCustom?.inputBoostEnabled ?: boostCfg.inputBoostEnabled,
+                    cpuBoostSilverKhz = silverBoostKhz,
+                    cpuBoostGoldKhz = goldBoostKhz,
                     cpuBoostPrimeKhz = primeBoostKhz,
-                    cpuBoostDurationMs = boostCfg.boostDurationMs,
-                    cpuBoostGpuThreshold = boostCfg.gpuLoadThresholdPercent,
-                    gpuPowerLevel = gpu.powerLevel,
+                    cpuBoostDurationMs = activeCustom?.cpuBoostDurationMs ?: boostCfg.boostDurationMs,
+                    cpuBoostGpuThreshold = activeCustom?.cpuBoostGpuThreshold ?: boostCfg.gpuLoadThresholdPercent,
+                    gpuPowerLevel = activeCustom?.gpuPowerLevel ?: gpu.powerLevel,
                     syncSystemMode = false,
                     thermalPolicy = tCfg.policy.name,
                     thermalSensorSource = tCfg.sensorSource.name,
                     thermalHysteresisC = tCfg.cooldownHysteresisC,
                     controlCpuFreqQos = tCfg.controlCpuFreqQos,
                     controlGpuPwrLevel = tCfg.controlGpuPwrLevel,
-                    suppressPrematureRomThrottle = tCfg.suppressPrematureRomThrottle,
+                    suppressPrematureRomThrottle = activeCustom?.suppressRomThermal ?: tCfg.suppressPrematureRomThrottle,
+                    backgroundThermalShedding = tCfg.backgroundThermalShedding,
                     stage1DropPct = tCfg.policy.stage1DropPct,
                     stage2DropPct = tCfg.policy.stage2DropPct,
                     stage3DropPct = tCfg.policy.stage3DropPct,
-                    triggerOffsetDeciC = tCfg.policy.triggerOffsetDeciC
+                    triggerOffsetDeciC = tCfg.policy.triggerOffsetDeciC,
+                    customWaltDownRateUs = activeCustom?.waltDownRateLimitUs,
+                    customUclampTopMinPct = activeCustom?.uclampTopMinPct,
+                    customUclampTopMaxPct = activeCustom?.uclampTopMaxPct,
+                    customLatencySensitive = activeCustom?.latencySensitive,
+                    busScaleMode = activeCustom?.busScaleMode ?: if (isDragonGaming) "HIGH_90" else if (isPeakTgame) "RESPONSIVE_75" else "AUTO"
                 )
+                if (res.output.contains("PROFILE_ENFORCED")) {
+                    isEnforcerDaemonAlive = true
+                }
                 syncClustersAndGpuFromProfileEnforcedOutput(res.output)
             } else {
                 if (hasManualCpuTweaks || isAppProfileActive) {
@@ -3351,7 +3938,31 @@ class KernelRepository private constructor(private val context: Context) {
         if (p3Cur != null) newCpuCurMap[1] = p3Cur!!
         if (p7Cur != null) newCpuCurMap[2] = p7Cur!!
         sysfsCpuCurKhz = newCpuCurMap
+
+        val newCpuMinMap = sysfsCpuMinKhz.toMutableMap()
+        val newCpuMaxMap = sysfsCpuMaxKhz.toMutableMap()
+        val newCpuGovMap = sysfsCpuGov.toMutableMap()
+        p0Min?.let { newCpuMinMap[0] = it }
+        p3Min?.let { newCpuMinMap[1] = it }
+        p7Min?.let { newCpuMinMap[2] = it }
+        p0Max?.let { newCpuMaxMap[0] = it }
+        p3Max?.let { newCpuMaxMap[1] = it }
+        p7Max?.let { newCpuMaxMap[2] = it }
+        p0Gov?.let { newCpuGovMap[0] = it }
+        p3Gov?.let { newCpuGovMap[1] = it }
+        p7Gov?.let { newCpuGovMap[2] = it }
+        sysfsCpuMinKhz = newCpuMinMap
+        sysfsCpuMaxKhz = newCpuMaxMap
+        sysfsCpuGov = newCpuGovMap
+        lastEnforcedCpuMinKhz = newCpuMinMap
+        lastEnforcedCpuMaxKhz = newCpuMaxMap
+        if (gpuMinMhz != null) lastEnforcedGpuMinMhz = gpuMinMhz
+        if (gpuMaxMhz != null) lastEnforcedGpuMaxMhz = gpuMaxMhz
+
         if (gpuCurMhz != null) sysfsGpuCurMhz = gpuCurMhz
+        if (gpuMinMhz != null) sysfsGpuMinMhz = gpuMinMhz
+        if (gpuMaxMhz != null) sysfsGpuMaxMhz = gpuMaxMhz
+        if (gpuGov != null) sysfsGpuGov = gpuGov
 
         if (p0Cur != null || p3Cur != null || p7Cur != null || p0Gov != null || p0Min != null || p0Max != null) {
             _cpuClustersFlow.value = _cpuClustersFlow.value.map { c ->
@@ -3471,6 +4082,13 @@ class KernelRepository private constructor(private val context: Context) {
             }
         }
 
+        sysfsCpuMinKhz = mapOf(0 to p0Min, 1 to p3Min, 2 to p7Min)
+        sysfsCpuMaxKhz = mapOf(0 to p0Max, 1 to p3Max, 2 to p7Max)
+        sysfsCpuGov = mapOf(0 to p0Gov, 1 to p3Gov, 2 to p7Gov)
+        sysfsGpuMinMhz = gpuMinMhz
+        sysfsGpuMaxMhz = gpuMaxMhz
+        sysfsGpuGov = gpuGov
+
         _cpuClustersFlow.value = _cpuClustersFlow.value.map { c ->
             when (c.id) {
                 0 -> c.copy(minFreqKhz = p0Min, maxFreqKhz = p0Max, governor = p0Gov)
@@ -3491,7 +4109,7 @@ class KernelRepository private constructor(private val context: Context) {
     }
 
     // Apply Profile
-    fun setBatteryProfile(profile: BatteryProfile) {
+    fun setBatteryProfile(profile: BatteryProfile, fromPerAppOverride: Boolean = false) {
         val prevProfile = _activeProfileFlow.value
         val prevCustom = _activeCustomProfileFlow.value
         val wasAppPowerSave = (prevCustom == null && prevProfile == BatteryProfile.POWER_SAVING) ||
@@ -3501,9 +4119,30 @@ class KernelRepository private constructor(private val context: Context) {
         hasManualGpuTweaks = false
         _activeProfileFlow.value = profile
         _activeCustomProfileFlow.value = null
-        saveActiveBatteryProfilePrefs(profile, null)
+        if (!fromPerAppOverride) {
+            saveActiveBatteryProfilePrefs(profile, null)
+            val curPerApp = _perAppProfileConfigFlow.value
+            val updatedPerApp = curPerApp.copy(
+                fallbackProfile = profile,
+                fallbackCustomProfileId = null,
+                activeEnforcedProfileTitle = if (curPerApp.isPerAppOverrideActive) curPerApp.activeEnforcedProfileTitle else "${profile.title} (Global)"
+            )
+            _perAppProfileConfigFlow.value = updatedPerApp
+            savePerAppProfilePrefs(updatedPerApp)
+        }
 
         if (profile == BatteryProfile.DEFAULT) {
+            sysfsCpuMinKhz = emptyMap()
+            sysfsCpuMaxKhz = emptyMap()
+            sysfsCpuGov = emptyMap()
+            sysfsGpuMinMhz = null
+            sysfsGpuMaxMhz = null
+            sysfsGpuGov = null
+            lastEnforcedCpuMinKhz = emptyMap()
+            lastEnforcedCpuMaxKhz = emptyMap()
+            lastEnforcedGpuMinMhz = null
+            lastEnforcedGpuMaxMhz = null
+            lastPerformanceEnforcementMs = SystemClock.elapsedRealtime()
             // Reset UI bounds to stock hardware range while handing 100% free control back to the ROM's inbuilt battery profiler
             _cpuClustersFlow.value = _cpuClustersFlow.value.map { c ->
                 when (c.id) {
@@ -3552,6 +4191,7 @@ class KernelRepository private constructor(private val context: Context) {
                     return@launch
                 }
 
+                isEnforcerDaemonAlive = false
                 val restoreLowPower = if (wasAppPowerSave) 0 else null
                 val res = RootHelper.restoreRomDefaultBatteryProfiler(restoreLowPowerState = restoreLowPower)
                 val romProfTag = syncClustersAndGpuFromRomRestoreOutput(res.output)
@@ -3562,7 +4202,7 @@ class KernelRepository private constructor(private val context: Context) {
             return
         }
 
-        val cpuGov = "schedutil"
+        val cpuGov = if (profile == BatteryProfile.GAMING) "walt" else "schedutil"
         val gpuGov = "msm-adreno-tz"
 
         val silverMin = profile.minCpuFreqSilverKhz
@@ -3584,7 +4224,18 @@ class KernelRepository private constructor(private val context: Context) {
         val initPrimeCur = prevPrime.coerceIn(primeMin, max(primeMin, primeMax))
         val initGpuCur = prevGpu.coerceIn(gpuMin, max(gpuMin, gpuMax))
         sysfsCpuCurKhz = mapOf(0 to initSilverCur, 1 to initGoldCur, 2 to initPrimeCur)
+        sysfsCpuMinKhz = emptyMap()
+        sysfsCpuMaxKhz = emptyMap()
+        sysfsCpuGov = emptyMap()
         sysfsGpuCurMhz = initGpuCur
+        sysfsGpuMinMhz = null
+        sysfsGpuMaxMhz = null
+        sysfsGpuGov = null
+        lastEnforcedCpuMinKhz = emptyMap()
+        lastEnforcedCpuMaxKhz = emptyMap()
+        lastEnforcedGpuMinMhz = null
+        lastEnforcedGpuMaxMhz = null
+        lastPerformanceEnforcementMs = SystemClock.elapsedRealtime()
 
         val clusters = _cpuClustersFlow.value.map { c ->
             when (c.id) {
@@ -3614,14 +4265,20 @@ class KernelRepository private constructor(private val context: Context) {
         )
 
         val isGaming = (profile == BatteryProfile.GAMING)
+        val isPeakTgame = (profile == BatteryProfile.PERFORMANCE)
+        val thermalTableMode = when {
+            isGaming -> "INDIA_NOLIMITS"
+            isPeakTgame -> "INDIA_TGAME"
+            else -> "STANDARD"
+        }
         val tCfg = _thermalControlFlow.value
         val effThermalLimit = if (isGaming) 0.0f else (if (tCfg.syncWithBatteryProfiler) profile.thermalLimitC else tCfg.customThermalLimitC)
         val effSocLimit = if (isGaming) 0.0f else profile.socThermalLimitC
         val effGpuLimit = if (isGaming) 0.0f else profile.gpuThermalLimitC
-        val statusMsg = if (isGaming) {
-            "Dragon Gaming Active • Throttleless Max Performance • Dynamic Scaling up to 3014/2800/2016 MHz & GPU 1100 MHz (No Thermal Limits)"
-        } else {
-            String.format(
+        val statusMsg = when {
+            isGaming -> "Dragon Gaming Beast • WALT Dynamic (1900–3014 / 1824–2803 / 1324–2016 MHz) • GPU 500–1100 MHz • Sustained FPS"
+            isPeakTgame -> "Peak Performance Active • INDIA-TGAME Thermal (45–62°C VIRTUAL-SENSOR0) • Full 3014/2803/2016 MHz & GPU 1000 MHz"
+            else -> String.format(
                 java.util.Locale.US,
                 "Synced with %s • BAT %.0f°C | SoC %.0f°C | GPU %.0f°C • Stage 0 Unthrottled",
                 profile.title, effThermalLimit, effSocLimit, effGpuLimit
@@ -3665,6 +4322,7 @@ class KernelRepository private constructor(private val context: Context) {
                 isGamingOrPerf = (profile == BatteryProfile.GAMING || profile == BatteryProfile.PERFORMANCE),
                 isPowerSaving = (profile == BatteryProfile.POWER_SAVING),
                 profileMode = profile.name,
+                thermalTableMode = thermalTableMode,
                 isUncapped = profile.isUncapped,
                 thermalLimitC = effThermalLimit,
                 socLimitC = effSocLimit,
@@ -3684,11 +4342,16 @@ class KernelRepository private constructor(private val context: Context) {
                 controlCpuFreqQos = tCfg.controlCpuFreqQos,
                 controlGpuPwrLevel = tCfg.controlGpuPwrLevel,
                 suppressPrematureRomThrottle = tCfg.suppressPrematureRomThrottle,
+                backgroundThermalShedding = tCfg.backgroundThermalShedding,
                 stage1DropPct = tCfg.policy.stage1DropPct,
                 stage2DropPct = tCfg.policy.stage2DropPct,
                 stage3DropPct = tCfg.policy.stage3DropPct,
-                triggerOffsetDeciC = tCfg.policy.triggerOffsetDeciC
+                triggerOffsetDeciC = tCfg.policy.triggerOffsetDeciC,
+                busScaleMode = if (isGaming) "HIGH_90" else if (isPeakTgame) "RESPONSIVE_75" else "AUTO"
             )
+            if (res.output.contains("PROFILE_ENFORCED")) {
+                isEnforcerDaemonAlive = true
+            }
             syncClustersAndGpuFromProfileEnforcedOutput(res.output)
             lastPerformanceEnforcementMs = SystemClock.elapsedRealtime()
             tickTelemetry()
@@ -3698,33 +4361,54 @@ class KernelRepository private constructor(private val context: Context) {
                 }
                 context.startService(refreshIntent)
             } catch (_: Exception) {}
-            val freqLabel = if (isGaming) {
-                "Dynamic Scaling up to 3014/2800/2016 MHz & GPU 1100 MHz • Zero Thermal Throttling"
-            } else if (profile.isUncapped) {
-                "Uncapped CPU & GPU (Floor ${primeMin / 1000}/${goldMin / 1000}/${silverMin / 1000}MHz) • ${effThermalLimit.toInt()}°C"
-            } else {
-                "Prime ${primeMax / 1000} / Gold ${goldMax / 1000} / Silver ${silverMax / 1000}MHz • GPU ${gpuMax}MHz • ${effThermalLimit.toInt()}°C"
+            val freqLabel = when {
+                isGaming -> "WALT Beast (1900–3014 / 1824–2803 / 1324–2016 MHz) • GPU 500–1100 MHz • Sustained FPS"
+                isPeakTgame -> "INDIA-TGAME Thermal (45–62°C Virtual) • 3014/2803/2016 MHz & GPU 1000 MHz"
+                profile.isUncapped -> "Uncapped CPU & GPU (Floor ${primeMin / 1000}/${goldMin / 1000}/${silverMin / 1000}MHz) • ${effThermalLimit.toInt()}°C"
+                else -> "Prime ${primeMax / 1000} / Gold ${goldMax / 1000} / Silver ${silverMax / 1000}MHz • GPU ${gpuMax}MHz • ${effThermalLimit.toInt()}°C"
             }
-            _lastActionFeedbackFlow.value = if (isGaming) {
-                "Dragon Gaming Active: Throttleless Max Performance • Dynamic Scaling up to 3014/2800/2016 MHz & GPU 1100 MHz (All thermal limits removed)"
-            } else {
-                "Power Profile active: ${profile.title} ($freqLabel)"
+            _lastActionFeedbackFlow.value = when {
+                isGaming -> "Dragon Gaming Beast Active: Dynamic WALT unlocked (3014/2803/2016 MHz • GPU 500–1100 MHz • Sustained FPS)"
+                isPeakTgame -> "Peak Performance Active: INDIA-TGAME Thermal applied (Full 3014/2803/2016 MHz & GPU 1000 MHz below 45°C Virtual)"
+                else -> "Power Profile active: ${profile.title} ($freqLabel)"
             }
         }
     }
 
-    fun setCustomBatteryProfile(cProfile: CustomBatteryProfile) {
+    fun setCustomBatteryProfile(cProfile: CustomBatteryProfile, fromPerAppOverride: Boolean = false) {
         hasManualCpuTweaks = false
         hasManualGpuTweaks = false
         _activeCustomProfileFlow.value = cProfile
-        saveActiveBatteryProfilePrefs(_activeProfileFlow.value, cProfile.id)
-        val isPowerSave = cProfile.governor == "powersave"
-        val isPerf = cProfile.governor == "performance"
-        val gpuGov = when {
-            isPerf -> "performance"
-            isPowerSave -> "powersave"
-            else -> "msm-adreno-tz"
+        if (!fromPerAppOverride) {
+            saveActiveBatteryProfilePrefs(_activeProfileFlow.value, cProfile.id)
+            val curPerApp = _perAppProfileConfigFlow.value
+            val updatedPerApp = curPerApp.copy(
+                fallbackCustomProfileId = cProfile.id,
+                activeEnforcedProfileTitle = if (curPerApp.isPerAppOverrideActive) curPerApp.activeEnforcedProfileTitle else "${cProfile.title} (Custom)"
+            )
+            _perAppProfileConfigFlow.value = updatedPerApp
+            savePerAppProfilePrefs(updatedPerApp)
         }
+        val isPowerSave = cProfile.governor == "powersave"
+        val isPerf = cProfile.governor == "performance" || cProfile.latencySensitive || cProfile.uclampTopMinPct >= 22
+        val gpuGov = cProfile.gpuGovernor.ifBlank {
+            when {
+                cProfile.governor == "performance" -> "performance"
+                isPowerSave -> "powersave"
+                else -> "msm-adreno-tz"
+            }
+        }
+        sysfsCpuMinKhz = emptyMap()
+        sysfsCpuMaxKhz = emptyMap()
+        sysfsCpuGov = emptyMap()
+        sysfsGpuMinMhz = null
+        sysfsGpuMaxMhz = null
+        sysfsGpuGov = null
+        lastEnforcedCpuMinKhz = emptyMap()
+        lastEnforcedCpuMaxKhz = emptyMap()
+        lastEnforcedGpuMinMhz = null
+        lastEnforcedGpuMaxMhz = null
+        lastPerformanceEnforcementMs = SystemClock.elapsedRealtime()
         val clusters = _cpuClustersFlow.value.map { c ->
             when (c.id) {
                 0 -> c.copy(minFreqKhz = cProfile.silverMinFreqKhz, maxFreqKhz = cProfile.silverMaxFreqKhz, governor = cProfile.governor)
@@ -3734,25 +4418,33 @@ class KernelRepository private constructor(private val context: Context) {
             }
         }
         _cpuClustersFlow.value = clusters
-        val boostSilver = if (isPowerSave) 1228800 else if (isPerf) 1843200 else 1497600
-        val boostGold = if (isPowerSave) 1555200 else if (isPerf) 2496000 else 1958400
-        val boostDur = if (isPowerSave) 0 else if (isPerf) 150 else 60
-        val boostThresh = if (isPowerSave) 85 else if (isPerf) 30 else 55
+        val boostSilver = cProfile.silverMaxFreqKhz
+        val boostGold = cProfile.goldMaxFreqKhz
+        val boostPrime = cProfile.primeMaxFreqKhz
+        val effCpuBoostEnabled = cProfile.cpuBoostEnabled && !isPowerSave
+        val effInputBoostEnabled = cProfile.inputBoostEnabled && !isPowerSave
+        val boostDur = if (!effInputBoostEnabled) 0 else cProfile.cpuBoostDurationMs
+        val boostThresh = cProfile.cpuBoostGpuThreshold
         _adrenoCpuBoostFlow.value = AdrenoCpuBoostConfig(
-            isEnabled = !isPowerSave,
+            isEnabled = effCpuBoostEnabled,
             boostFreqSilverKhz = boostSilver,
             boostFreqGoldKhz = boostGold,
             boostDurationMs = boostDur,
             gpuLoadThresholdPercent = boostThresh,
-            inputBoostEnabled = !isPowerSave
+            inputBoostEnabled = effInputBoostEnabled
         )
         _gpuConfigFlow.value = _gpuConfigFlow.value.copy(
             minFreqMhz = cProfile.gpuMinFreqMhz,
             maxFreqMhz = cProfile.gpuMaxFreqMhz,
             governor = gpuGov,
-            gpuBoostEnabled = !isPowerSave,
-            gpuBoostLevel = if (isPerf) "AGGRESSIVE" else "LOW",
-            powerLevel = if (isPerf) 0 else if (isPowerSave) 3 else 2
+            gpuBoostEnabled = cProfile.adrenoBoostVal > 0 && !isPowerSave,
+            gpuBoostLevel = when (cProfile.adrenoBoostVal) {
+                3 -> "AGGRESSIVE"
+                2 -> "DYNAMIC"
+                1 -> "LOW"
+                else -> "OFF"
+            },
+            powerLevel = cProfile.gpuPowerLevel
         )
 
         val tCfg = _thermalControlFlow.value
@@ -3797,33 +4489,44 @@ class KernelRepository private constructor(private val context: Context) {
                 gpuGov = gpuGov,
                 gpuMinMhz = cProfile.gpuMinFreqMhz,
                 gpuMaxMhz = cProfile.gpuMaxFreqMhz,
-                adrenoBoostVal = if (isPerf) 3 else if (isPowerSave) 0 else 1,
+                adrenoBoostVal = cProfile.adrenoBoostVal,
                 isGamingOrPerf = isPerf,
                 isPowerSaving = isPowerSave,
                 profileMode = if (isPerf) "PERFORMANCE" else if (isPowerSave) "POWER_SAVING" else "BALANCED",
+                thermalTableMode = "STANDARD",
                 isUncapped = false,
                 thermalLimitC = effThermalLimit,
                 socLimitC = effSocLimit,
                 gpuLimitC = effGpuLimit,
-                cpuBoostEnabled = !isPowerSave,
-                inputBoostEnabled = !isPowerSave,
+                cpuBoostEnabled = effCpuBoostEnabled,
+                inputBoostEnabled = effInputBoostEnabled,
                 cpuBoostSilverKhz = boostSilver,
                 cpuBoostGoldKhz = boostGold,
+                cpuBoostPrimeKhz = boostPrime,
                 cpuBoostDurationMs = boostDur,
                 cpuBoostGpuThreshold = boostThresh,
-                gpuPowerLevel = if (isPerf) 0 else if (isPowerSave) 3 else 2,
+                gpuPowerLevel = cProfile.gpuPowerLevel,
                 syncSystemMode = true,
                 thermalPolicy = tCfg.policy.name,
                 thermalSensorSource = tCfg.sensorSource.name,
                 thermalHysteresisC = tCfg.cooldownHysteresisC,
                 controlCpuFreqQos = tCfg.controlCpuFreqQos,
                 controlGpuPwrLevel = tCfg.controlGpuPwrLevel,
-                suppressPrematureRomThrottle = tCfg.suppressPrematureRomThrottle,
+                suppressPrematureRomThrottle = cProfile.suppressRomThermal,
+                backgroundThermalShedding = tCfg.backgroundThermalShedding,
                 stage1DropPct = tCfg.policy.stage1DropPct,
                 stage2DropPct = tCfg.policy.stage2DropPct,
                 stage3DropPct = tCfg.policy.stage3DropPct,
-                triggerOffsetDeciC = tCfg.policy.triggerOffsetDeciC
+                triggerOffsetDeciC = tCfg.policy.triggerOffsetDeciC,
+                customWaltDownRateUs = cProfile.waltDownRateLimitUs,
+                customUclampTopMinPct = cProfile.uclampTopMinPct,
+                customUclampTopMaxPct = cProfile.uclampTopMaxPct,
+                customLatencySensitive = cProfile.latencySensitive,
+                busScaleMode = cProfile.busScaleMode
             )
+            if (res.output.contains("PROFILE_ENFORCED")) {
+                isEnforcerDaemonAlive = true
+            }
             syncClustersAndGpuFromProfileEnforcedOutput(res.output)
             lastPerformanceEnforcementMs = SystemClock.elapsedRealtime()
             tickTelemetry()
@@ -3833,7 +4536,7 @@ class KernelRepository private constructor(private val context: Context) {
                 }
                 context.startService(refreshIntent)
             } catch (_: Exception) {}
-            _lastActionFeedbackFlow.value = "Custom Profile active: ${cProfile.title} (${effThermalLimit.toInt()}°C Thermal Sync)"
+            _lastActionFeedbackFlow.value = "Custom Profile active: ${cProfile.title} (${effThermalLimit.toInt()}°C • ${cProfile.governor.uppercase()} • ${cProfile.busScaleMode})"
         }
     }
 
@@ -3908,19 +4611,22 @@ class KernelRepository private constructor(private val context: Context) {
         saveThermalControlPrefs(updated)
         if (!updated.isRomDefaultPassthrough) {
             enforceActivePerformanceRulesAsync(forceImmediate = true)
+            _lastActionFeedbackFlow.value = String.format(java.util.Locale.US, "Thermal Cooldown Hysteresis set to %.1f°C", clamped)
         }
     }
 
     fun setThermalHardwareOptions(
         controlCpuFreqQos: Boolean = _thermalControlFlow.value.controlCpuFreqQos,
         controlGpuPwrLevel: Boolean = _thermalControlFlow.value.controlGpuPwrLevel,
-        suppressPrematureRomThrottle: Boolean = _thermalControlFlow.value.suppressPrematureRomThrottle
+        suppressPrematureRomThrottle: Boolean = _thermalControlFlow.value.suppressPrematureRomThrottle,
+        backgroundThermalShedding: Boolean = _thermalControlFlow.value.backgroundThermalShedding
     ) {
         val cur = _thermalControlFlow.value
         val updated = cur.copy(
             controlCpuFreqQos = controlCpuFreqQos,
             controlGpuPwrLevel = controlGpuPwrLevel,
-            suppressPrematureRomThrottle = suppressPrematureRomThrottle
+            suppressPrematureRomThrottle = suppressPrematureRomThrottle,
+            backgroundThermalShedding = backgroundThermalShedding
         )
         _thermalControlFlow.value = updated
         saveThermalControlPrefs(updated)
@@ -3944,7 +4650,20 @@ class KernelRepository private constructor(private val context: Context) {
         primeMaxKhz: Int,
         gpuMinMhz: Int,
         gpuMaxMhz: Int,
-        governor: String
+        governor: String,
+        gpuGovernor: String = "msm-adreno-tz",
+        adrenoBoostVal: Int = 1,
+        gpuPowerLevel: Int = 1,
+        cpuBoostEnabled: Boolean = true,
+        inputBoostEnabled: Boolean = true,
+        cpuBoostDurationMs: Int = 100,
+        cpuBoostGpuThreshold: Int = 40,
+        waltDownRateLimitUs: Int = 500000,
+        uclampTopMinPct: Int = 15,
+        uclampTopMaxPct: Int = 100,
+        latencySensitive: Boolean = false,
+        busScaleMode: String = "DYNAMIC",
+        suppressRomThermal: Boolean = true
     ) {
         val newProfile = CustomBatteryProfile(
             id = "custom_" + System.currentTimeMillis(),
@@ -3953,28 +4672,250 @@ class KernelRepository private constructor(private val context: Context) {
             thermalLimitC = thermalLimitC,
             socThermalLimitC = socThermalLimitC,
             gpuThermalLimitC = gpuThermalLimitC,
-            silverMinFreqKhz = silverMinKhz,
+            silverMinFreqKhz = silverMinKhz.coerceAtMost(silverMaxKhz),
             silverMaxFreqKhz = silverMaxKhz,
-            goldMinFreqKhz = goldMinKhz,
+            goldMinFreqKhz = goldMinKhz.coerceAtMost(goldMaxKhz),
             goldMaxFreqKhz = goldMaxKhz,
-            primeMinFreqKhz = primeMinKhz,
+            primeMinFreqKhz = primeMinKhz.coerceAtMost(primeMaxKhz),
             primeMaxFreqKhz = primeMaxKhz,
-            gpuMinFreqMhz = gpuMinMhz,
+            gpuMinFreqMhz = gpuMinMhz.coerceAtMost(gpuMaxMhz),
             gpuMaxFreqMhz = gpuMaxMhz,
-            governor = governor
+            governor = governor,
+            gpuGovernor = gpuGovernor,
+            adrenoBoostVal = adrenoBoostVal.coerceIn(0, 3),
+            gpuPowerLevel = gpuPowerLevel.coerceIn(0, 5),
+            cpuBoostEnabled = cpuBoostEnabled,
+            inputBoostEnabled = inputBoostEnabled,
+            cpuBoostDurationMs = cpuBoostDurationMs.coerceIn(0, 500),
+            cpuBoostGpuThreshold = cpuBoostGpuThreshold.coerceIn(5, 95),
+            waltDownRateLimitUs = waltDownRateLimitUs.coerceIn(0, 2000000),
+            uclampTopMinPct = uclampTopMinPct.coerceIn(0, 60),
+            uclampTopMaxPct = uclampTopMaxPct.coerceIn(40, 100),
+            latencySensitive = latencySensitive,
+            busScaleMode = busScaleMode,
+            suppressRomThermal = suppressRomThermal
         )
-        _customProfilesFlow.value = _customProfilesFlow.value + newProfile
+        val updatedList = _customProfilesFlow.value + newProfile
+        _customProfilesFlow.value = updatedList
+        saveCustomProfilesPrefs(updatedList)
         setCustomBatteryProfile(newProfile)
         _lastActionFeedbackFlow.value = "Custom Profile Created & Applied: $title"
     }
 
+    fun updateCustomProfile(updatedProfile: CustomBatteryProfile) {
+        val updatedList = _customProfilesFlow.value.map {
+            if (it.id == updatedProfile.id) updatedProfile else it
+        }
+        _customProfilesFlow.value = updatedList
+        saveCustomProfilesPrefs(updatedList)
+        setCustomBatteryProfile(updatedProfile)
+        _lastActionFeedbackFlow.value = "Custom Profile Updated & Applied: ${updatedProfile.title}"
+    }
+
     fun deleteCustomProfile(id: String) {
-        _customProfilesFlow.value = _customProfilesFlow.value.filter { it.id != id }
+        val updatedList = _customProfilesFlow.value.filter { it.id != id }
+        _customProfilesFlow.value = updatedList
+        saveCustomProfilesPrefs(updatedList)
         if (_activeCustomProfileFlow.value?.id == id) {
             _activeCustomProfileFlow.value = null
             setBatteryProfile(BatteryProfile.DEFAULT)
         }
         _lastActionFeedbackFlow.value = "Custom Profile Deleted"
+    }
+
+    // Per-App Battery & Refresh Rate Profile Engine (POCO F6 SM8635 AOSP)
+    fun togglePerAppProfilesEnabled(enabled: Boolean) {
+        val cur = _perAppProfileConfigFlow.value
+        val updated = cur.copy(
+            isEnabled = enabled,
+            isPerAppOverrideActive = if (!enabled) false else cur.isPerAppOverrideActive,
+            activeEnforcedProfileTitle = if (!enabled) "${cur.fallbackProfile.title} (Global)" else cur.activeEnforcedProfileTitle
+        )
+        _perAppProfileConfigFlow.value = updated
+        savePerAppProfilePrefs(updated)
+        if (!enabled) {
+            lastPerAppEnforcedPkg = ""
+            if (wasBypassAutoEnabledByPerApp) {
+                wasBypassAutoEnabledByPerApp = false
+                toggleBypassCharging(false)
+            }
+            setBatteryProfile(updated.fallbackProfile, fromPerAppOverride = true)
+            _lastActionFeedbackFlow.value = "Per-App Profiles Disabled • Restored Global Profile (${updated.fallbackProfile.title})"
+        } else {
+            val fgPkg = _activeForegroundAppFlow.value
+            evaluatePerAppProfileForForeground(fgPkg, forceReapply = true)
+            _lastActionFeedbackFlow.value = "Per-App Profiles Enabled (${updated.rules.size} app rules active)"
+        }
+    }
+
+    fun setPerAppFallbackProfile(profile: BatteryProfile) {
+        val cur = _perAppProfileConfigFlow.value
+        val updated = cur.copy(
+            fallbackProfile = profile,
+            fallbackCustomProfileId = null,
+            activeEnforcedProfileTitle = if (cur.isPerAppOverrideActive) cur.activeEnforcedProfileTitle else "${profile.title} (Global)"
+        )
+        _perAppProfileConfigFlow.value = updated
+        savePerAppProfilePrefs(updated)
+        if (!cur.isPerAppOverrideActive) {
+            setBatteryProfile(profile, fromPerAppOverride = false)
+        } else {
+            _lastActionFeedbackFlow.value = "Global Fallback Profile set to ${profile.title}"
+        }
+    }
+
+    fun setPerAppRule(rule: AppBatteryProfileRule) {
+        val cur = _perAppProfileConfigFlow.value
+        val filtered = cur.rules.filterNot { it.packageName.equals(rule.packageName, ignoreCase = true) }
+        val updatedRules = listOf(rule) + filtered
+        val updated = cur.copy(rules = updatedRules)
+        _perAppProfileConfigFlow.value = updated
+        savePerAppProfilePrefs(updated)
+        if (updated.isEnabled && _activeForegroundAppFlow.value.equals(rule.packageName, ignoreCase = true)) {
+            evaluatePerAppProfileForForeground(rule.packageName, forceReapply = true)
+        }
+        _lastActionFeedbackFlow.value = "Per-App Rule saved: ${rule.appName} → ${rule.profile.title} (${rule.refreshRateHz}Hz)"
+    }
+
+    fun removePerAppRule(packageName: String) {
+        val cur = _perAppProfileConfigFlow.value
+        val removed = cur.rules.find { it.packageName.equals(packageName, ignoreCase = true) }
+        val updatedRules = cur.rules.filterNot { it.packageName.equals(packageName, ignoreCase = true) }
+        val updated = cur.copy(rules = updatedRules)
+        _perAppProfileConfigFlow.value = updated
+        savePerAppProfilePrefs(updated)
+        if (_activeForegroundAppFlow.value.equals(packageName, ignoreCase = true)) {
+            evaluatePerAppProfileForForeground(_activeForegroundAppFlow.value, forceReapply = true)
+        }
+        _lastActionFeedbackFlow.value = "Removed Per-App Profile for ${removed?.appName ?: packageName}"
+    }
+
+    fun autoConfigureInstalledGamesForPocoF6() {
+        scope.launch(Dispatchers.IO) {
+            val installed = _appsFlow.value
+            val gameKeywords = listOf(
+                "pubg", "bgmi", "genshin", "mihoyo", "hoyoverse", "starrail", "zzz",
+                "wuthering", "kurogame", "callofduty", "activision", "freefire", "dts.freefire",
+                "mobilelegends", "moonton", "valorant", "riotgames", "fortnite", "epicgames",
+                "carx", "asphalt", "gameloft", "roblox", "minecraft", "mojang", "brawlstars",
+                "supercell", "clash", "arenaofvalor", "honorofkings", "deltaforce", "arknights",
+                "azurlane", "nikke", "punishing", "solo", "netmarble", "netease", "tencent", "ea.game"
+            )
+            val cur = _perAppProfileConfigFlow.value
+            val existingMap = cur.rules.associateBy { it.packageName.lowercase() }.toMutableMap()
+            var addedCount = 0
+            for (app in installed) {
+                if (app.isSystem) continue
+                val pkgLower = app.packageName.lowercase()
+                val nameLower = app.appName.lowercase()
+                val isGame = gameKeywords.any { kw -> pkgLower.contains(kw) || nameLower.contains(kw) }
+                if (isGame && !existingMap.containsKey(pkgLower)) {
+                    existingMap[pkgLower] = AppBatteryProfileRule(
+                        packageName = app.packageName,
+                        appName = app.appName,
+                        profile = BatteryProfile.GAMING,
+                        refreshRateHz = 120,
+                        enableBypassCharging = true,
+                        clearRamOnLaunch = true
+                    )
+                    addedCount++
+                }
+            }
+            val newRules = existingMap.values.toList()
+            val updated = cur.copy(isEnabled = true, rules = newRules)
+            _perAppProfileConfigFlow.value = updated
+            savePerAppProfilePrefs(updated)
+            _lastActionFeedbackFlow.value = if (addedCount > 0) {
+                "Auto-configured $addedCount installed games with POCO F6 Dragon Gaming + Auto-Bypass"
+            } else {
+                "Per-App Game Scan complete (${newRules.size} rules active)"
+            }
+        }
+    }
+
+    private fun applyPerAppRamTweaks(rule: AppBatteryProfileRule, isNewAppSwitch: Boolean) {
+        if (!rule.clearRamOnLaunch || !isNewAppSwitch) return
+        scope.launch(Dispatchers.IO) {
+            val ramCmd = "sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true; am send-trim-memory ${rule.packageName} RUNNING_LOW 2>/dev/null || true;"
+            RootHelper.executeCommand(ramCmd)
+        }
+    }
+
+    fun evaluatePerAppProfileForForeground(packageName: String, forceReapply: Boolean = false) {
+        if (packageName.isBlank()) return
+        val cur = _perAppProfileConfigFlow.value
+        val resolvedName = resolveAppNameForPackage(packageName)
+        if (!cur.isEnabled) {
+            _perAppProfileConfigFlow.value = cur.copy(
+                activeForegroundPackage = packageName,
+                activeForegroundAppName = resolvedName,
+                isPerAppOverrideActive = false,
+                activeEnforcedProfileTitle = "${cur.fallbackProfile.title} (Global)"
+            )
+            return
+        }
+
+        // Ignore our own manager app so user can inspect/change settings without triggering fallback mid-configuration
+        if (packageName == context.packageName && !forceReapply) {
+            _perAppProfileConfigFlow.value = cur.copy(
+                activeForegroundPackage = packageName,
+                activeForegroundAppName = "Dragon Kernel Manager"
+            )
+            return
+        }
+
+        val matchingRule = cur.rules.find { it.packageName.equals(packageName, ignoreCase = true) }
+        if (matchingRule != null) {
+            val isNewSwitch = !lastPerAppEnforcedPkg.equals(packageName, ignoreCase = true) || forceReapply
+            lastPerAppEnforcedPkg = packageName
+            val customProf = matchingRule.customProfileId?.let { cid ->
+                _customProfilesFlow.value.find { it.id == cid }
+            }
+            val titleLabel = customProf?.title ?: matchingRule.profile.title
+            _perAppProfileConfigFlow.value = cur.copy(
+                activeForegroundPackage = packageName,
+                activeForegroundAppName = matchingRule.appName.ifBlank { resolvedName },
+                activeEnforcedProfileTitle = titleLabel,
+                isPerAppOverrideActive = true
+            )
+            if (isNewSwitch) {
+                if (customProf != null) {
+                    setCustomBatteryProfile(customProf, fromPerAppOverride = true)
+                } else if (_activeProfileFlow.value != matchingRule.profile || _activeCustomProfileFlow.value != null || forceReapply) {
+                    setBatteryProfile(matchingRule.profile, fromPerAppOverride = true)
+                }
+                applyPerAppRamTweaks(matchingRule, isNewAppSwitch = true)
+                if (matchingRule.enableBypassCharging && _batteryFlow.value.isPluggedIn && !_chargingControlsFlow.value.bypassCharging) {
+                    wasBypassAutoEnabledByPerApp = true
+                    toggleBypassCharging(true)
+                }
+                _lastActionFeedbackFlow.value = "Per-App Active: ${matchingRule.appName} → $titleLabel"
+            }
+        } else {
+            val wasOverride = cur.isPerAppOverrideActive || lastPerAppEnforcedPkg.isNotBlank()
+            lastPerAppEnforcedPkg = ""
+            val fbCustom = cur.fallbackCustomProfileId?.let { cid ->
+                _customProfilesFlow.value.find { it.id == cid }
+            }
+            val fbTitle = fbCustom?.title ?: cur.fallbackProfile.title
+            _perAppProfileConfigFlow.value = cur.copy(
+                activeForegroundPackage = packageName,
+                activeForegroundAppName = resolvedName,
+                activeEnforcedProfileTitle = "$fbTitle (Global Fallback)",
+                isPerAppOverrideActive = false
+            )
+            if (wasOverride) {
+                if (fbCustom != null) {
+                    setCustomBatteryProfile(fbCustom, fromPerAppOverride = true)
+                } else if (_activeProfileFlow.value != cur.fallbackProfile || _activeCustomProfileFlow.value != null) {
+                    setBatteryProfile(cur.fallbackProfile, fromPerAppOverride = true)
+                }
+                if (wasBypassAutoEnabledByPerApp) {
+                    wasBypassAutoEnabledByPerApp = false
+                    toggleBypassCharging(false)
+                }
+            }
+        }
     }
 
     fun requestRootForChargingSpeed() {
@@ -4353,11 +5294,57 @@ class KernelRepository private constructor(private val context: Context) {
         }
     }
 
+    fun toggleChargingPresets(enable: Boolean) {
+        val cur = _chargingControlsFlow.value
+        if (enable) {
+            val updated = cur.copy(chargingPresetsEnabled = true)
+            _chargingControlsFlow.value = updated
+            saveChargingControlsPrefs(updated)
+            setChargingSpeedMode(cur.speedMode)
+        } else {
+            val statusMsg = if (cur.manualCurrentLimiterEnabled) {
+                "Charging Presets OFF • Custom Current Limiter Active (${cur.manualCurrentLimitMa} mA)"
+            } else {
+                "Charging Presets OFF • ROM Default Inbuilt Charging Speed & Thermal Active"
+            }
+            val updated = cur.copy(
+                chargingPresetsEnabled = false,
+                romDefaultOverridden = cur.manualCurrentLimiterEnabled,
+                activeOverrideStatus = statusMsg,
+                lastRootOverrideCommand = if (cur.manualCurrentLimiterEnabled) cur.lastRootOverrideCommand else "ROM_DEFAULT_PASSTHROUGH"
+            )
+            _chargingControlsFlow.value = updated
+            saveChargingControlsPrefs(updated)
+            tickTelemetry()
+
+            chargingLimiterJob?.cancel()
+            chargingLimiterJob = scope.launch {
+                val granted = RootHelper.grantRootChargingPermissions(context.packageName)
+                _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
+                val latest = _chargingControlsFlow.value
+                if (latest.manualCurrentLimiterEnabled) {
+                    setManualCurrentLimiter(true, latest.manualCurrentLimitMa)
+                } else {
+                    RootHelper.enforceRootChargingCurrentLimit(
+                        packageName = context.packageName,
+                        enabled = false,
+                        currentMa = 20000,
+                        externalBypassActive = latest.bypassCharging
+                    )
+                    pollPowerSupplySysfsAsync()
+                    tickTelemetry()
+                    _lastActionFeedbackFlow.value = "Charging Speed Presets OFF • Device now uses ROM Default Charging Speed & Thermal"
+                }
+            }
+        }
+    }
+
     fun setChargingSpeedMode(mode: ChargingSpeedMode) {
         val cur = _chargingControlsFlow.value
         val presetMa = mode.maxCurrentMa.coerceIn(1000, 20000)
         val targetUa = presetMa * 1000L
         val updated = cur.copy(
+            chargingPresetsEnabled = true,
             speedMode = mode,
             // Sync manualCurrentLimitMa to the selected preset so if Custom Current Limiter is ON (or toggled on later),
             // it immediately honors the newly chosen preset rather than staying stuck at an old current limit.
@@ -4410,7 +5397,7 @@ class KernelRepository private constructor(private val context: Context) {
             saveChargingControlsPrefs(finalControls)
             pollPowerSupplySysfsAsync()
             tickTelemetry()
-            _lastActionFeedbackFlow.value = "Charging preset active: ${mode.label} (${mode.maxWattage}W / ${mode.maxCurrentMa} mA)"
+            _lastActionFeedbackFlow.value = "Charging preset ON: ${mode.label} (${mode.maxWattage}W / ${mode.maxCurrentMa} mA)"
         }
     }
 
@@ -4537,8 +5524,10 @@ class KernelRepository private constructor(private val context: Context) {
             } else {
                 "Enforcing Max Current Ceiling: $clampedMa mA (~${approxWatts}W • $targetUa µA)..."
             }
-        } else {
+        } else if (cur.chargingPresetsEnabled) {
             "Active Preset: ${cur.speedMode.label} (${cur.speedMode.maxCurrentMa} mA / ${cur.speedMode.maxWattage}W Max)"
+        } else {
+            "Charging Presets OFF • ROM Default Inbuilt Charging Speed & Thermal Active"
         }
 
         val updatedControls = cur.copy(
@@ -4547,9 +5536,13 @@ class KernelRepository private constructor(private val context: Context) {
             manualCurrentLimitMa = clampedMa,
             isCustomTempThrottlingActive = isTempTriggered,
             effectiveEnforcedCurrentMa = effectiveMa,
-            romDefaultOverridden = true,
+            romDefaultOverridden = enabled || cur.chargingPresetsEnabled,
             activeOverrideStatus = statusMsg,
-            lastRootOverrideCommand = "/sys/class/power_supply/{battery,usb,main}/constant_charge_current_max ($targetUa µA)"
+            lastRootOverrideCommand = if (enabled || cur.chargingPresetsEnabled) {
+                "/sys/class/power_supply/{battery,usb,main}/constant_charge_current_max ($targetUa µA)"
+            } else {
+                "ROM_DEFAULT_PASSTHROUGH"
+            }
         )
         _chargingControlsFlow.value = updatedControls
         saveChargingControlsPrefs(updatedControls)
@@ -4562,6 +5555,7 @@ class KernelRepository private constructor(private val context: Context) {
             _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
             val latest = _chargingControlsFlow.value
             val liveTemp = _batteryFlow.value.temperatureC
+            val shouldEnforce = latest.manualCurrentLimiterEnabled || latest.chargingPresetsEnabled
             val latestTargetMa = if (latest.manualCurrentLimiterEnabled) {
                 latest.manualCurrentLimitMa
             } else {
@@ -4570,7 +5564,7 @@ class KernelRepository private constructor(private val context: Context) {
 
             val res = RootHelper.enforceRootChargingCurrentLimit(
                 packageName = context.packageName,
-                enabled = true,
+                enabled = shouldEnforce,
                 currentMa = latestTargetMa,
                 fallbackSpeedModeMa = max(latest.speedMode.maxCurrentMa, latestTargetMa),
                 lockReadOnly = latest.lockSysfsNodesReadOnly,
@@ -4602,13 +5596,15 @@ class KernelRepository private constructor(private val context: Context) {
                 } else {
                     "Max Limit Set: $currentCeilingMa mA (${(currentCeilingMa * 4.5f / 1000f).roundToInt()}W Max)"
                 }
-            } else {
+            } else if (afterRoot.chargingPresetsEnabled) {
                 "Active Preset: ${afterRoot.speedMode.label} (${afterRoot.speedMode.maxCurrentMa} mA / ${afterRoot.speedMode.maxWattage}W)"
+            } else {
+                "Charging Presets OFF • ROM Default Inbuilt Charging Speed & Thermal Active"
             }
             val finalControls = afterRoot.copy(
-                romDefaultOverridden = granted || RootHelper.isRootAvailable,
+                romDefaultOverridden = shouldEnforce && (granted || RootHelper.isRootAvailable),
                 activeOverrideStatus = finalStatus,
-                lastRootOverrideCommand = appliedInfo
+                lastRootOverrideCommand = if (shouldEnforce) appliedInfo else "ROM_DEFAULT_PASSTHROUGH"
             )
             _chargingControlsFlow.value = finalControls
             saveChargingControlsPrefs(finalControls)
@@ -4620,8 +5616,10 @@ class KernelRepository private constructor(private val context: Context) {
                 } else {
                     "Custom Current Limiter Enforced up to $currentCeilingMa mA (~${(currentCeilingMa * 4.5f / 1000f).roundToInt()}W)"
                 }
-            } else {
+            } else if (afterRoot.chargingPresetsEnabled) {
                 "Custom Current Limiter Disabled • Active Preset: ${afterRoot.speedMode.label} (${afterRoot.speedMode.maxCurrentMa} mA)"
+            } else {
+                "Custom Current Limiter Disabled • Restored ROM Default Charging Speed"
             }
         }
     }
@@ -4683,7 +5681,7 @@ class KernelRepository private constructor(private val context: Context) {
         saveChargingControlsPrefs(updated)
         if (cur.manualCurrentLimiterEnabled) {
             setManualCurrentLimiter(true, cur.manualCurrentLimitMa)
-        } else {
+        } else if (cur.chargingPresetsEnabled) {
             setChargingSpeedMode(cur.speedMode)
         }
     }
@@ -5029,8 +6027,46 @@ class KernelRepository private constructor(private val context: Context) {
         )
     }
 
+    private fun loadSavedFpsOverlayPrefs(): FpsOverlayConfig {
+        return try {
+            val prefs = context.getSharedPreferences("dragon_fps_overlay_prefs", Context.MODE_PRIVATE)
+            val styleName = prefs.getString("overlay_style", FpsOverlayStyle.FULL_METER.name)
+            val overlayStyle = FpsOverlayStyle.entries.find { it.name == styleName } ?: FpsOverlayStyle.FULL_METER
+            FpsOverlayConfig(
+                isEnabled = false,
+                overlayStyle = overlayStyle,
+                showFps = prefs.getBoolean("show_fps", true),
+                showForegroundApp = prefs.getBoolean("show_fg_app", true),
+                showFrameTimeMs = prefs.getBoolean("show_frame_time", true),
+                showCpuTemp = prefs.getBoolean("show_cpu_temp", true),
+                showBatTemp = prefs.getBoolean("show_bat_temp", true),
+                showGpuClock = prefs.getBoolean("show_gpu_clock", true),
+                scaleFactor = prefs.getFloat("scale_factor", 1.0f)
+            )
+        } catch (_: Exception) {
+            FpsOverlayConfig()
+        }
+    }
+
+    private fun saveFpsOverlayPrefs(cfg: FpsOverlayConfig) {
+        try {
+            val prefs = context.getSharedPreferences("dragon_fps_overlay_prefs", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("overlay_style", cfg.overlayStyle.name)
+                .putBoolean("show_fps", cfg.showFps)
+                .putBoolean("show_fg_app", cfg.showForegroundApp)
+                .putBoolean("show_frame_time", cfg.showFrameTimeMs)
+                .putBoolean("show_cpu_temp", cfg.showCpuTemp)
+                .putBoolean("show_bat_temp", cfg.showBatTemp)
+                .putBoolean("show_gpu_clock", cfg.showGpuClock)
+                .putFloat("scale_factor", cfg.scaleFactor)
+                .apply()
+        } catch (_: Exception) {}
+    }
+
     fun updateFpsOverlayConfig(cfg: FpsOverlayConfig) {
         _fpsOverlayConfigFlow.value = cfg
+        saveFpsOverlayPrefs(cfg)
     }
 
     // Tools: Resolution & DPI
@@ -5667,6 +6703,30 @@ class KernelRepository private constructor(private val context: Context) {
         }
     }
 
+    fun toggleMaterial3Ui(enabled: Boolean) {
+        if (enabled) {
+            _accentColorIndexFlow.value = GamingThemePreset.MATERIAL_3_EXPRESSIVE.primaryAccentIndex
+            _isAmoledBlackFlow.value = false
+            updateThemeConfig {
+                it.copy(
+                    surfaceMode = SurfaceThemeMode.MATERIAL_3,
+                    isLiquidGlassEnabled = false,
+                    useCustomPrimaryColor = false,
+                    useDynamicColor = false,
+                    primaryAccentIndex = GamingThemePreset.MATERIAL_3_EXPRESSIVE.primaryAccentIndex,
+                    secondaryAccentIndex = GamingThemePreset.MATERIAL_3_EXPRESSIVE.secondaryAccentIndex,
+                    borderGlowIntensity = 0.22f,
+                    headerGlowIntensity = 0.10f,
+                    cornerRadiusDp = 22,
+                    activePresetName = GamingThemePreset.MATERIAL_3_EXPRESSIVE.title
+                )
+            }
+            _lastActionFeedbackFlow.value = "Material 3 Expressive UI Activated • Eye-Soothing Tonal Palette"
+        } else {
+            applyGamingThemePreset(GamingThemePreset.ROG_CRIMSON)
+        }
+    }
+
     fun setLiquidGlassOpacity(opacity: Float) {
         updateThemeConfig {
             it.copy(
@@ -5788,7 +6848,8 @@ class KernelRepository private constructor(private val context: Context) {
     }
 
     fun resetThemeDefaults() {
-        applyGamingThemePreset(GamingThemePreset.ROG_CRIMSON)
+        applyGamingThemePreset(GamingThemePreset.MATERIAL_3_EXPRESSIVE)
+        setNotificationPanelStyle(NotificationPanelStyle.MATERIAL_3_UI)
     }
 
     fun saveCustomColorPalette(name: String) {
@@ -5877,7 +6938,9 @@ class KernelRepository private constructor(private val context: Context) {
                     nativePeakHz = getPeakSupportedRefreshRate()
                 )
                 _isAccessibilityEnabledFlow.value = true
-                enforceActivePerformanceRulesAsync(forceImmediate = true)
+                if (!isEnforcerDaemonAlive) {
+                    enforceActivePerformanceRulesAsync(forceImmediate = true)
+                }
                 enforceActiveChargingRulesAsync(forceImmediate = true)
             }
         }
@@ -5886,13 +6949,10 @@ class KernelRepository private constructor(private val context: Context) {
     // Accessibility Monitoring
     fun onAccessibilityServiceStateChanged(connected: Boolean) {
         _isAccessibilityEnabledFlow.value = connected
-        if (connected) {
+        if (connected && !isEnforcerDaemonAlive) {
             enforceActivePerformanceRulesAsync(forceImmediate = true)
         }
     }
-
-    @Volatile
-    private var lastAccessibilityEnforceMs: Long = 0L
 
     fun onForegroundAppChanged(packageName: String, className: String) {
         if (packageName.isBlank()) return
@@ -5900,7 +6960,6 @@ class KernelRepository private constructor(private val context: Context) {
         if (isTransientOrOverlayPackage(packageName)) {
             return
         }
-        val prevPkg = _activeForegroundAppFlow.value
         _activeForegroundAppFlow.value = packageName
         liveDetectedFgPkg = packageName
 
@@ -5910,23 +6969,7 @@ class KernelRepository private constructor(private val context: Context) {
             val fgCaps = _frameGenCapabilitiesFlow.value
             val isExplicitAdded = packageName != context.packageName &&
                 fgCfg.addedGamePackages.any { it.equals(packageName, ignoreCase = true) }
-            val gameCompat = if (packageName != context.packageName) {
-                FrameGenEngine.inspectPackageGameCompatibility(
-                    context = context,
-                    packageName = packageName,
-                    appLabel = liveDetectedFgAppName,
-                    capabilities = fgCaps,
-                    isManuallyAdded = isExplicitAdded
-                )
-            } else null
-            val isRecognizedGame = gameCompat != null && (gameCompat.engineType != GameEngineType.SYSTEM_OR_NON_GAME || gameCompat.isCompatible)
-            val isAddedGame = packageName != context.packageName &&
-                (isExplicitAdded || (fgCfg.isEnabled && (isRecognizedGame || fgCfg.addedGamePackages.isEmpty())))
-
-            // Automatically enroll recognized foreground game into the target games list
-            if (isRecognizedGame && !isExplicitAdded && packageName != context.packageName && (fgCfg.isEnabled || fgCfg.autoActivateForGames)) {
-                addGameToFrameGen(packageName, liveDetectedFgAppName)
-            }
+            val isAddedGame = isExplicitAdded
 
             if (isAddedGame && fgCaps.isFrameGenSupported && (fgCfg.autoActivateForGames || fgCfg.isEnabled)) {
                 if (!fgCfg.isEnabled) {
@@ -5974,13 +7017,7 @@ class KernelRepository private constructor(private val context: Context) {
             updateFrameGenTelemetrySync()
             onForegroundAppChangedForAdBlocker(packageName)
             visualStyleManager.onForegroundAppChanged(packageName)
-
-            val isAppProfileActive = _activeCustomProfileFlow.value != null || _activeProfileFlow.value != BatteryProfile.DEFAULT
-            val nowMs = SystemClock.elapsedRealtime()
-            if ((prevPkg != packageName) && (isAppProfileActive || hasManualCpuTweaks || hasManualGpuTweaks) && (nowMs - lastAccessibilityEnforceMs) > 1_200L) {
-                lastAccessibilityEnforceMs = nowMs
-                enforceActivePerformanceRulesAsync(forceImmediate = true)
-            }
+            evaluatePerAppProfileForForeground(packageName)
         }
     }
 
@@ -6108,18 +7145,37 @@ class KernelRepository private constructor(private val context: Context) {
             val sizeName = prefs.getString("fg_floating_size", FrameGenFloatingSize.MEDIUM.name)
             val floatingSize = FrameGenFloatingSize.entries.find { it.name == sizeName }
                 ?: FrameGenFloatingSize.MEDIUM
-            val savedGames = (prefs.getStringSet("fg_added_games", emptySet()) ?: emptySet())
-                .filter { it.isNotBlank() && it != context.packageName }
-                .toSet()
+            // Migration: clear any previously auto-added games once so FrameGen only keeps manual additions
+            val savedGames = if (!prefs.getBoolean("fg_manual_only_v2", false)) {
+                if (prefs.getBoolean("fg_added_games_initialized", false)) {
+                    prefs.edit()
+                        .remove("fg_added_games")
+                        .remove("fg_added_game_titles")
+                        .putBoolean("fg_manual_only_v2", true)
+                        .apply()
+                    emptySet()
+                } else {
+                    prefs.edit().putBoolean("fg_manual_only_v2", true).apply()
+                    (prefs.getStringSet("fg_added_games", emptySet()) ?: emptySet())
+                        .filter { it.isNotBlank() && it != context.packageName }
+                        .toSet()
+                }
+            } else {
+                (prefs.getStringSet("fg_added_games", emptySet()) ?: emptySet())
+                    .filter { it.isNotBlank() && it != context.packageName }
+                    .toSet()
+            }
 
-            val titlesRaw = prefs.getString("fg_added_game_titles", "") ?: ""
-            titlesRaw.split("|||").forEach { entry ->
-                val idx = entry.indexOf('=')
-                if (idx > 0) {
-                    val pkg = entry.substring(0, idx).trim()
-                    val title = entry.substring(idx + 1).trim()
-                    if (pkg.isNotBlank() && title.isNotBlank()) {
-                        customFrameGenGameNames[pkg] = title
+            if (savedGames.isNotEmpty()) {
+                val titlesRaw = prefs.getString("fg_added_game_titles", "") ?: ""
+                titlesRaw.split("|||").forEach { entry ->
+                    val idx = entry.indexOf('=')
+                    if (idx > 0) {
+                        val pkg = entry.substring(0, idx).trim()
+                        val title = entry.substring(idx + 1).trim()
+                        if (pkg.isNotBlank() && title.isNotBlank()) {
+                            customFrameGenGameNames[pkg] = title
+                        }
                     }
                 }
             }
@@ -6129,9 +7185,16 @@ class KernelRepository private constructor(private val context: Context) {
             val losslessBicubic = prefs.getBoolean("fg_lossless_bicubic", true)
             val losslessReflex = prefs.getBoolean("fg_lossless_reflex", true)
 
-            // Do NOT turn on FrameGen automatically when opening the Dragon Tools app itself;
-            // instead, autoActivateForGames=true activates FrameGen & the Mini Floating Window ONLY when a selected game opens!
-            prefs.edit().putBoolean("fg_enabled", false).apply()
+            // Enforce FrameGen OFF by default on fresh install or first run of default-off update
+            if (!prefs.getBoolean("fg_default_off_v1", false)) {
+                prefs.edit()
+                    .putBoolean("fg_enabled", false)
+                    .putBoolean("fg_auto_games_v2", false)
+                    .putBoolean("fg_default_off_v1", true)
+                    .apply()
+            } else {
+                prefs.edit().putBoolean("fg_enabled", false).apply()
+            }
 
             FrameGenConfig(
                 isEnabled = false,
@@ -6140,7 +7203,7 @@ class KernelRepository private constructor(private val context: Context) {
                 intensity = prefs.getFloat("fg_intensity", 0.80f).coerceIn(0.10f, 1.00f),
                 targetFps = prefs.getInt("fg_target_fps", 120).coerceIn(60, 144),
                 autoGpuCompatibilityDetection = prefs.getBoolean("fg_auto_gpu", true),
-                autoActivateForGames = prefs.getBoolean("fg_auto_games_v2", true),
+                autoActivateForGames = prefs.getBoolean("fg_auto_games_v2", false),
                 autoShowFloatingWindow = prefs.getBoolean("fg_auto_mini_window", true),
                 floatingStyle = floatingStyle,
                 floatingSize = floatingSize,
@@ -6316,20 +7379,6 @@ class KernelRepository private constructor(private val context: Context) {
                 }
             }
 
-            // First-run convenience: if user has never initialized added games and real games were detected, pre-add detected games (never Dragon Tools)
-            val prefs = context.getSharedPreferences("dragon_framegen_prefs", Context.MODE_PRIVATE)
-            if (!prefs.getBoolean("fg_added_games_initialized", false)) {
-                val initialGamePkgs = detectedList
-                    .filter { it.packageName != context.packageName && it.engineType != GameEngineType.SYSTEM_OR_NON_GAME }
-                    .map {
-                        customFrameGenGameNames[it.packageName] = it.appName
-                        it.packageName
-                    }
-                    .toSet()
-                activeAddedGames = activeAddedGames + initialGamePkgs
-                prefs.edit().putBoolean("fg_added_games_initialized", true).apply()
-            }
-
             _detectedGamesCompatibilityFlow.value = detectedList
                 .sortedBy { it.appName.lowercase(java.util.Locale.US) }
                 .take(50)
@@ -6365,10 +7414,8 @@ class KernelRepository private constructor(private val context: Context) {
 
         val cur = _frameGenConfigFlow.value
         val updatedPkgs = cur.addedGamePackages + cleanPkg
-        // Ensure autoActivateForGames is enabled when adding a game so opening that game activates FrameGen & Mini FPS Window
         val updated = cur.copy(
-            addedGamePackages = updatedPkgs,
-            autoActivateForGames = true
+            addedGamePackages = updatedPkgs
         )
         _frameGenConfigFlow.value = updated
         saveFrameGenPrefs(updated)
@@ -6437,9 +7484,7 @@ class KernelRepository private constructor(private val context: Context) {
             capabilities = caps,
             isManuallyAdded = isExplicitAdded
         )
-        val isRecognizedGame = rawFgCompat.engineType != GameEngineType.SYSTEM_OR_NON_GAME || rawFgCompat.isCompatible
-        val isAddedGame = fgPkg != context.packageName &&
-            (isExplicitAdded || (cfg.isEnabled && (isRecognizedGame || cfg.addedGamePackages.isEmpty())))
+        val isAddedGame = isExplicitAdded
         val fgCompat = if (isAddedGame && !rawFgCompat.isAddedToFrameGen) {
             rawFgCompat.copy(isAddedToFrameGen = true)
         } else {
@@ -6991,7 +8036,9 @@ class KernelRepository private constructor(private val context: Context) {
         val cur = _adBlockerTelemetryFlow.value
         val cfg = _adBlockerConfigFlow.value
         val accActive = _isAccessibilityEnabledFlow.value || checkAccessibilityStatus()
-        val isLspActive = lspInfo.isModuleHookedInApp || lspInfo.isModuleEnabledInLSPosed
+        val isLspActive = lspInfo.isModuleHookedInApp ||
+            lspInfo.isModuleEnabledInLSPosed ||
+            lspInfo.isRunningInLSPosedContainer
         val activeLayers = countActiveXposedLayers(cfg)
         val summaryPrefix = if (isLspActive) "Xposed (${activeLayers}/5 Hooks) + " else ""
         _adBlockerTelemetryFlow.value = cur.copy(
@@ -7005,20 +8052,36 @@ class KernelRepository private constructor(private val context: Context) {
             isInAppAdShieldActive = isLspActive || (accActive && (cfg.autoSkipInAppSocialAds || cfg.autoSwipeSponsoredReels)),
             isLsposedFrameworkDetected = lspInfo.isFrameworkInstalled,
             isLsposedModuleActive = isLspActive,
+            isRunningInLsposedContainer = lspInfo.isRunningInLSPosedContainer,
+            lsposedContainerType = lspInfo.containerType.name,
             lsposedVariant = lspInfo.frameworkVariant,
             lsposedPermissionsGranted = lspInfo.arePermissionsGranted,
-            enforcementSummary = summaryPrefix + status.enforcementSummary
+            lsposedConfiguredScopeCount = lspInfo.configuredScopeCount,
+            enforcementSummary = if (cfg.isGlobalEnabled || cur.isActive) {
+                summaryPrefix + status.enforcementSummary
+            } else if (lspInfo.isRunningInLSPosedContainer || isLspActive) {
+                "${lspInfo.frameworkVariant} • Ready (${lspInfo.configuredScopeCount} scoped apps)"
+            } else {
+                status.enforcementSummary
+            }
         )
     }
 
     private fun loadAdBlockerPrefs(): AdBlockerConfig {
         return try {
-            val prefs = context.getSharedPreferences("dragon_adblocker_prefs", Context.MODE_PRIVATE)
+            val (prefs, _) = com.example.xposed.DragonXposedModule.openAdBlockerSharedPrefs(context)
+            if (!prefs.getBoolean("adblock_default_off_v1", false)) {
+                prefs.edit()
+                    .putBoolean("adblock_global_enabled", false)
+                    .putBoolean("adblock_auto_activate", false)
+                    .putBoolean("adblock_default_off_v1", true)
+                    .apply()
+            }
             val modeName = prefs.getString("adblock_mode", AdBlockerMode.HYBRID_ROOT_DNS.name)
             val mode = AdBlockerMode.entries.find { it.name == modeName } ?: AdBlockerMode.HYBRID_ROOT_DNS
             val dns = prefs.getString("adblock_dns", "dns.adguard.com") ?: "dns.adguard.com"
-            val globalEnabled = prefs.getBoolean("adblock_global_enabled", true)
-            val autoActivate = prefs.getBoolean("adblock_auto_activate", true)
+            val globalEnabled = prefs.getBoolean("adblock_global_enabled", false)
+            val autoActivate = prefs.getBoolean("adblock_auto_activate", false)
             val videoAds = prefs.getBoolean("adblock_video_ads", true)
             val sponsored = prefs.getBoolean("adblock_sponsored", true)
             val telemetry = prefs.getBoolean("adblock_telemetry", true)
@@ -7072,7 +8135,7 @@ class KernelRepository private constructor(private val context: Context) {
 
     private fun saveAdBlockerPrefs(config: AdBlockerConfig) {
         try {
-            val prefs = context.getSharedPreferences("dragon_adblocker_prefs", Context.MODE_PRIVATE)
+            val (prefs, _) = com.example.xposed.DragonXposedModule.openAdBlockerSharedPrefs(context)
             val editor = prefs.edit()
                 .putBoolean("adblock_global_enabled", config.isGlobalEnabled)
                 .putBoolean("adblock_auto_activate", config.autoActivateOnSocialApps)
@@ -7395,10 +8458,12 @@ class KernelRepository private constructor(private val context: Context) {
     private fun initAdBlockerEngineAsync() {
         scope.launch(Dispatchers.IO) {
             val cfg = _adBlockerConfigFlow.value
-            if (cfg.isGlobalEnabled) {
-                val status = AdBlockerEngine.applyAdBlocking(context, cfg)
-                syncAdBlockerVerificationStatus(status)
+            val status = if (cfg.isGlobalEnabled) {
+                AdBlockerEngine.applyAdBlocking(context, cfg)
+            } else {
+                AdBlockerEngine.verifyActiveProtection(context, cfg)
             }
+            syncAdBlockerVerificationStatus(status)
             while (true) {
                 kotlinx.coroutines.delay(12000L)
                 val curTelem = _adBlockerTelemetryFlow.value

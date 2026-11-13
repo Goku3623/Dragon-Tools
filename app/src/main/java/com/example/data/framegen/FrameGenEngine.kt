@@ -937,11 +937,10 @@ object FrameGenEngine {
         }
 
         val isExplicitAddedGame = config.addedGamePackages.any { it.equals(foregroundApp.packageName, ignoreCase = true) }
-        val isRecognizedGameEngine = foregroundApp.engineType != GameEngineType.SYSTEM_OR_NON_GAME
         val isForegroundAddedGame = foregroundApp.packageName.isNotBlank() &&
             foregroundApp.packageName != "surfaceflinger.global" &&
             foregroundApp.packageName != "com.example" &&
-            (isExplicitAddedGame || (config.isEnabled && (isRecognizedGameEngine || config.addedGamePackages.isEmpty())))
+            isExplicitAddedGame
 
         // 1. Hardware support check
         if (!capabilities.isFrameGenSupported) {

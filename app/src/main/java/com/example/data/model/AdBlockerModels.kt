@@ -161,8 +161,8 @@ enum class SocialPlatform(
 }
 
 data class AdBlockerConfig(
-    val isGlobalEnabled: Boolean = true,
-    val autoActivateOnSocialApps: Boolean = true,
+    val isGlobalEnabled: Boolean = false,
+    val autoActivateOnSocialApps: Boolean = false,
     val mode: AdBlockerMode = AdBlockerMode.HYBRID_ROOT_DNS,
     val customDnsProvider: String = "dns.adguard.com",
     val blockVideoAds: Boolean = true,
@@ -199,7 +199,7 @@ data class AdBlockEvent(
 )
 
 data class AdBlockerTelemetry(
-    val isActive: Boolean = true,
+    val isActive: Boolean = false,
     val isAutoTriggered: Boolean = false,
     val activeForegroundApp: String = "",
     val activeForegroundPlatform: SocialPlatform? = null,
@@ -211,16 +211,19 @@ data class AdBlockerTelemetry(
     val isHostsSinkholeVerified: Boolean = false,
     val isPrivateDnsVerified: Boolean = false,
     val isNetfilterVerified: Boolean = false,
-    val isQuicBlocked: Boolean = true,
+    val isQuicBlocked: Boolean = false,
     val isInAppAdShieldActive: Boolean = false,
     val inAppAdsSkippedCount: Int = 0,
     val xposedAdsHookedCount: Int = 0,
     val activeXposedHookLayers: Int = 5,
     val isLsposedFrameworkDetected: Boolean = false,
     val isLsposedModuleActive: Boolean = false,
+    val isRunningInLsposedContainer: Boolean = false,
+    val lsposedContainerType: String = "NONE",
     val lsposedVariant: String = "LSPosed Module Ready",
     val lsposedPermissionsGranted: Boolean = false,
-    val enforcementSummary: String = "Multi-Layer Shield Armed (LSPosed 5-Layer Hook + Hosts + DoT + QUIC Drop)",
+    val lsposedConfiguredScopeCount: Int = 22,
+    val enforcementSummary: String = "Standby • Ad Blocker is OFF",
     val recentBlockedEvents: List<AdBlockEvent> = listOf(
         AdBlockEvent(
             System.currentTimeMillis() - 25000,
