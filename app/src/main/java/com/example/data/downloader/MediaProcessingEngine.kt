@@ -97,14 +97,20 @@ object MediaProcessingEngine {
 
             // If separate audio file had no compatible track, check if videoFile already has audio
             var useEmbeddedAudioFromVideo = false
+            var embeddedAudioIdx = -1
             if (audioTrackIndex < 0) {
-                val embeddedAudioIdx = selectTrackByPrefix(videoExtractor, "audio/")
+                embeddedAudioIdx = selectTrackByPrefix(videoExtractor, "audio/")
                 if (embeddedAudioIdx >= 0) {
                     useEmbeddedAudioFromVideo = true
                 }
             }
 
             if (useEmbeddedAudioFromVideo) {
+                if (isMpegTsFile(videoFile)) {
+                    if (remuxTsToMp4(videoFile, outputFile, onProgress)) {
+                        return true
+                    }
+                }
                 videoFile.copyTo(outputFile, overwrite = true)
                 onProgress(1.0f)
                 return outputFile.exists() && outputFile.length() > 1024L
@@ -181,6 +187,7 @@ object MediaProcessingEngine {
             }
 
             // 2. Copy Audio Samples (if compatible audio track was added)
+            val effectiveVideoDurationUs = maxOf(videoDurationUs, lastVideoPts)
             if (muxerAudioTrack >= 0 && audioExtractor != null) {
                 var sawAudioEOS = false
                 var lastAudioPts = 0L
@@ -191,7 +198,7 @@ object MediaProcessingEngine {
                         sawAudioEOS = true
                     } else {
                         val sampleTime = audioExtractor.sampleTime
-                        if (videoDurationUs > 0L && sampleTime > videoDurationUs + 500_000L) {
+                        if (effectiveVideoDurationUs > 0L && sampleTime > effectiveVideoDurationUs + 500_000L) {
                             sawAudioEOS = true
                         } else {
                             bufferInfo.offset = 0
@@ -227,6 +234,98 @@ object MediaProcessingEngine {
         } finally {
             try { videoExtractor?.release() } catch (_: Exception) {}
             try { audioExtractor?.release() } catch (_: Exception) {}
+            try { muxer?.release() } catch (_: Exception) {}
+        }
+    }
+
+    fun isMpegTsFile(file: File): Boolean {
+        if (!file.exists() || file.length() < 189L) return false
+        return try {
+            val head = ByteArray(192)
+            val count = file.inputStream().use { it.read(head) }
+            count >= 189 && (head[0].toInt() and 0xFF) == 0x47 && (head[188].toInt() and 0xFF) == 0x47
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun remuxTsToMp4(
+        inputTsFile: File,
+        outputMp4File: File,
+        onProgress: (Float) -> Unit = {}
+    ): Boolean {
+        var extractor: MediaExtractor? = null
+        var muxer: MediaMuxer? = null
+        try {
+            if (!inputTsFile.exists() || inputTsFile.length() < 1024L) return false
+            extractor = MediaExtractor().apply { setDataSource(inputTsFile.absolutePath) }
+            val trackMapping = HashMap<Int, Int>()
+            val lastPtsByTrack = HashMap<Int, Long>()
+            var maxDurationUs = 0L
+
+            if (outputMp4File.exists()) outputMp4File.delete()
+            muxer = MediaMuxer(outputMp4File.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+
+            for (i in 0 until extractor.trackCount) {
+                val fmt = extractor.getTrackFormat(i)
+                val mime = fmt.getString(MediaFormat.KEY_MIME) ?: continue
+                val isCompatible = mime.startsWith("video/") || mime.contains("mp4a", true) || mime.contains("aac", true)
+                if (isCompatible) {
+                    try {
+                        val dstIdx = muxer.addTrack(fmt)
+                        trackMapping[i] = dstIdx
+                        lastPtsByTrack[i] = -1L
+                        extractor.selectTrack(i)
+                        if (fmt.containsKey(MediaFormat.KEY_DURATION)) {
+                            val d = fmt.getLong(MediaFormat.KEY_DURATION)
+                            if (d > maxDurationUs) maxDurationUs = d
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+
+            if (trackMapping.isEmpty()) return false
+            muxer.start()
+
+            val buffer = ByteBuffer.allocateDirect(1024 * 1024)
+            val bufferInfo = MediaCodec.BufferInfo()
+            var samples = 0
+            while (true) {
+                val srcTrack = extractor.sampleTrackIndex
+                if (srcTrack < 0) break
+                val dstTrack = trackMapping[srcTrack]
+                if (dstTrack == null) {
+                    extractor.advance()
+                    continue
+                }
+                buffer.clear()
+                val size = extractor.readSampleData(buffer, 0)
+                if (size < 0) break
+                val sampleTime = extractor.sampleTime.coerceAtLeast(0L)
+                val prevPts = lastPtsByTrack[srcTrack] ?: -1L
+                val safePts = if (sampleTime <= prevPts) prevPts + 1L else sampleTime
+                lastPtsByTrack[srcTrack] = safePts
+
+                bufferInfo.offset = 0
+                bufferInfo.size = size
+                bufferInfo.presentationTimeUs = safePts
+                bufferInfo.flags = mapExtractorFlagsToCodecFlags(extractor.sampleFlags)
+                muxer.writeSampleData(dstTrack, buffer, bufferInfo)
+                samples++
+                if (maxDurationUs > 0L && samples % 50 == 0) {
+                    onProgress((safePts.toFloat() / maxDurationUs.toFloat()).coerceIn(0f, 0.99f))
+                }
+                extractor.advance()
+            }
+
+            muxer.stop()
+            onProgress(1.0f)
+            return samples > 0 && outputMp4File.exists() && outputMp4File.length() > 1024L
+        } catch (_: Exception) {
+            try { outputMp4File.delete() } catch (_: Exception) {}
+            return false
+        } finally {
+            try { extractor?.release() } catch (_: Exception) {}
             try { muxer?.release() } catch (_: Exception) {}
         }
     }
@@ -1451,6 +1550,108 @@ object MediaProcessingEngine {
             videoMime = videoMime ?: if (expectVideo) "video/avc" else null,
             audioMime = audioMime ?: if (expectAudio) "audio/mp4a-latm" else null,
             errorReason = errorReason
+        )
+    }
+
+    /**
+     * Validates an arbitrary downloaded file (ZIP, APK, PDF, ISO, PNG, DOCX, EXE, BIN, etc.).
+     * Verifies non-zero length, guards against disguised HTML error pages when binary content is expected,
+     * and checks against expected Content-Length when known.
+     */
+    fun validateUniversalFile(
+        file: File,
+        expectedExtension: String,
+        expectedMimeType: String,
+        expectedContentLength: Long = -1L
+    ): MediaValidationResult {
+        if (!file.exists()) {
+            return MediaValidationResult(
+                isValid = false,
+                fileSizeBytes = 0L,
+                durationMs = 0L,
+                hasVideo = false,
+                hasAudio = false,
+                width = 0,
+                height = 0,
+                videoMime = null,
+                audioMime = null,
+                errorReason = "Output file does not exist."
+            )
+        }
+
+        val length = file.length()
+        if (length <= 0L) {
+            return MediaValidationResult(
+                isValid = false,
+                fileSizeBytes = 0L,
+                durationMs = 0L,
+                hasVideo = false,
+                hasAudio = false,
+                width = 0,
+                height = 0,
+                videoMime = null,
+                audioMime = null,
+                errorReason = "Downloaded file is empty (0 bytes)."
+            )
+        }
+
+        if (expectedContentLength > 0L && length < (expectedContentLength * 0.90).toLong()) {
+            return MediaValidationResult(
+                isValid = false,
+                fileSizeBytes = length,
+                durationMs = 0L,
+                hasVideo = false,
+                hasAudio = false,
+                width = 0,
+                height = 0,
+                videoMime = null,
+                audioMime = null,
+                errorReason = "Downloaded file is incomplete ($length / $expectedContentLength bytes)."
+            )
+        }
+
+        val ext = expectedExtension.lowercase(Locale.US).removePrefix(".")
+        val expectsMarkupOrText = ext in setOf("html", "htm", "xhtml", "xml", "svg", "txt", "csv", "json", "rtf")
+        if (!expectsMarkupOrText) {
+            try {
+                val headBytes = ByteArray(128)
+                val readCount = file.inputStream().use { it.read(headBytes) }
+                if (readCount > 0) {
+                    val headAscii = String(headBytes, 0, readCount, Charsets.ISO_8859_1).trimStart()
+                    if (headAscii.startsWith("<!DOCTYPE html", ignoreCase = true) ||
+                        headAscii.startsWith("<html", ignoreCase = true) ||
+                        headAscii.startsWith("#EXTM3U", ignoreCase = true)
+                    ) {
+                        return MediaValidationResult(
+                            isValid = false,
+                            fileSizeBytes = length,
+                            durationMs = 0L,
+                            hasVideo = false,
+                            hasAudio = false,
+                            width = 0,
+                            height = 0,
+                            videoMime = null,
+                            audioMime = null,
+                            errorReason = "Server returned an HTML/playlist page instead of .$ext file."
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        val label = ext.ifBlank { "FILE" }.uppercase(Locale.US)
+        return MediaValidationResult(
+            isValid = true,
+            fileSizeBytes = length,
+            durationMs = 0L,
+            hasVideo = false,
+            hasAudio = false,
+            width = 0,
+            height = 0,
+            videoMime = expectedMimeType.ifBlank { "application/$label" },
+            audioMime = null,
+            errorReason = null
         )
     }
 

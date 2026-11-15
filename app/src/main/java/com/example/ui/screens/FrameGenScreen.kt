@@ -120,6 +120,7 @@ import com.example.data.model.FrameGenTelemetry
 import com.example.data.model.GameEngineType
 import com.example.data.model.MotionEstimationQuality
 import com.example.data.repository.KernelRepository
+import com.example.ui.haptics.LocalDragonHaptics
 import com.example.ui.theme.LocalThemeCustomization
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -364,6 +365,7 @@ private fun CompactExpandableFrameGenCard(
     alwaysVisibleStrip: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -377,7 +379,10 @@ private fun CompactExpandableFrameGenCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .minimumInteractiveComponentSize()
-                    .clickable(onClick = onToggleExpand)
+                    .clickable {
+                        haptics.tap()
+                        onToggleExpand()
+                    }
                     .padding(horizontal = 12.dp, vertical = 9.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -479,6 +484,7 @@ private fun FrameGenHeroMasterCard(
     cardCorner: RoundedCornerShape,
     onToggleEnabled: (Boolean) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     val statusColor by animateColorAsState(
         targetValue = when {
             !capabilities.isFrameGenSupported -> Color(0xFFFF5252)
@@ -579,7 +585,10 @@ private fun FrameGenHeroMasterCard(
 
                 Switch(
                     checked = config.isEnabled && capabilities.isFrameGenSupported,
-                    onCheckedChange = { onToggleEnabled(it) },
+                    onCheckedChange = {
+                        haptics.toggle(it)
+                        onToggleEnabled(it)
+                    },
                     enabled = capabilities.isFrameGenSupported,
                     modifier = Modifier
                         .scale(0.82f)
@@ -646,6 +655,7 @@ private fun FrameGenTargetGamesCard(
     onOpenAddGameDialog: () -> Unit,
     onRemoveGame: (String) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var expanded by rememberSaveable { mutableStateOf(false) }
     val subtitleText = when {
         addedGames.isEmpty() -> "No games added • Tap + ADD to choose targets"
@@ -811,7 +821,10 @@ private fun FrameGenTargetGamesCard(
                             }
 
                             IconButton(
-                                onClick = { onRemoveGame(game.packageName) },
+                                onClick = {
+                                    haptics.warning()
+                                    onRemoveGame(game.packageName)
+                                },
                                 modifier = Modifier
                                     .size(32.dp)
                                     .testTag("framegen_remove_game_${game.packageName}")
@@ -836,8 +849,12 @@ private fun FilledTonalButtonCompat(
     onClick: () -> Unit,
     primaryColor: Color
 ) {
+    val haptics = LocalDragonHaptics.current
     Button(
-        onClick = onClick,
+        onClick = {
+            haptics.tap()
+            onClick()
+        },
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
         modifier = Modifier
             .height(28.dp)
@@ -873,6 +890,7 @@ private fun AddFrameGenGameDialog(
     onRemoveGame: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var manualGameName by remember { mutableStateOf("") }
     var manualPackageName by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
@@ -948,7 +966,10 @@ private fun AddFrameGenGameDialog(
                         )
                     }
                     IconButton(
-                        onClick = onDismiss,
+                        onClick = {
+                            haptics.tap()
+                            onDismiss()
+                        },
                         modifier = Modifier
                             .size(30.dp)
                             .testTag("framegen_close_add_dialog_button")
@@ -1020,6 +1041,7 @@ private fun AddFrameGenGameDialog(
                         onClick = {
                             val pkg = manualPackageName.trim()
                             if (pkg.isNotEmpty()) {
+                                haptics.confirm()
                                 onAddGame(pkg, manualGameName.trim())
                                 manualPackageName = ""
                                 manualGameName = ""
@@ -1074,7 +1096,13 @@ private fun AddFrameGenGameDialog(
                                             RoundedCornerShape(6.dp)
                                         )
                                         .clickable {
-                                            if (isAdded) onRemoveGame(pkg) else onAddGame(pkg, title)
+                                            if (isAdded) {
+                                                haptics.warning()
+                                                onRemoveGame(pkg)
+                                            } else {
+                                                haptics.confirm()
+                                                onAddGame(pkg, title)
+                                            }
                                         }
                                         .padding(horizontal = 8.dp, vertical = 5.dp),
                                     contentAlignment = Alignment.CenterStart
@@ -1142,7 +1170,13 @@ private fun AddFrameGenGameDialog(
                                     RoundedCornerShape(8.dp)
                                 )
                                 .clickable {
-                                    if (isAdded) onRemoveGame(pkg) else onAddGame(pkg, appName)
+                                    if (isAdded) {
+                                        haptics.warning()
+                                        onRemoveGame(pkg)
+                                    } else {
+                                        haptics.confirm()
+                                        onAddGame(pkg, appName)
+                                    }
                                 }
                                 .padding(horizontal = 10.dp, vertical = 7.dp)
                                 .testTag("framegen_pick_app_$pkg"),
@@ -1503,6 +1537,7 @@ private fun FrameGenOpticalFlowVisualizerCard(
     onToggleShowVectors: (Boolean) -> Unit,
     onBenchmarkSample: (Float, Float, Float) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var expanded by rememberSaveable { mutableStateOf(false) }
     val simWidth = 64
     val simHeight = 36
@@ -1717,7 +1752,10 @@ private fun FrameGenOpticalFlowVisualizerCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Switch(
                         checked = config.showMotionVectorsInVisualizer,
-                        onCheckedChange = onToggleShowVectors,
+                        onCheckedChange = {
+                            haptics.toggle(it)
+                            onToggleShowVectors(it)
+                        },
                         modifier = Modifier.testTag("framegen_vectors_switch")
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -1737,7 +1775,10 @@ private fun FrameGenOpticalFlowVisualizerCard(
 
             Slider(
                 value = motionSpeed,
-                onValueChange = { motionSpeed = it },
+                onValueChange = {
+                    haptics.sliderTick()
+                    motionSpeed = it
+                },
                 valueRange = 0.4f..2.5f,
                 colors = SliderDefaults.colors(
                     thumbColor = secondaryColor,
@@ -1818,6 +1859,7 @@ private fun FrameGenSettingsCard(
     onSelectFloatingSize: (FrameGenFloatingSize) -> Unit,
     onToggleFloatingPreview: (Boolean) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var expanded by rememberSaveable { mutableStateOf(false) }
 
     CompactExpandableFrameGenCard(
@@ -1863,7 +1905,10 @@ private fun FrameGenSettingsCard(
                                 else Color(0xFF0A0D14)
                             )
                             .border(1.dp, borderCol, RoundedCornerShape(10.dp))
-                            .clickable(enabled = isSupported) { onSelectMode(mode) }
+                            .clickable(enabled = isSupported) {
+                                haptics.tap()
+                                onSelectMode(mode)
+                            }
                             .padding(12.dp)
                             .testTag("framegen_mode_${mode.name.lowercase(Locale.US)}")
                     ) {
@@ -1937,7 +1982,10 @@ private fun FrameGenSettingsCard(
                                 if (isSelected) secondaryColor else Color(0xFF263238),
                                 RoundedCornerShape(10.dp)
                             )
-                            .clickable { onSelectQuality(qual) }
+                            .clickable {
+                                haptics.tap()
+                                onSelectQuality(qual)
+                            }
                             .padding(10.dp)
                             .testTag("framegen_quality_${qual.name.lowercase(Locale.US)}"),
                         horizontalAlignment = Alignment.CenterHorizontally
@@ -1989,7 +2037,10 @@ private fun FrameGenSettingsCard(
             }
             Slider(
                 value = config.intensity,
-                onValueChange = onChangeIntensity,
+                onValueChange = {
+                    haptics.sliderTick()
+                    onChangeIntensity(it)
+                },
                 valueRange = 0.10f..1.00f,
                 modifier = Modifier.testTag("framegen_intensity_slider"),
                 colors = SliderDefaults.colors(
@@ -2036,7 +2087,10 @@ private fun FrameGenSettingsCard(
                                 },
                                 RoundedCornerShape(8.dp)
                             )
-                            .clickable(enabled = supported) { onSelectTargetFps(target) }
+                            .clickable(enabled = supported) {
+                                haptics.tap()
+                                onSelectTargetFps(target)
+                            }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -2115,6 +2169,7 @@ private fun AutoMiniFloatingWindowCustomizationSection(
     onSelectFloatingSize: (FrameGenFloatingSize) -> Unit,
     onToggleFloatingPreview: (Boolean) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     val scale = config.floatingSize.scaleFactor
     val style = config.floatingStyle
     val previewNativeFps = telemetry.nativeFps.coerceIn(1, 240)
@@ -2169,7 +2224,10 @@ private fun AutoMiniFloatingWindowCustomizationSection(
             }
 
             OutlinedButton(
-                onClick = { onToggleFloatingPreview(!config.floatingWindowPreviewActive) },
+                onClick = {
+                    haptics.tap()
+                    onToggleFloatingPreview(!config.floatingWindowPreviewActive)
+                },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                 modifier = Modifier
                     .height(30.dp)
@@ -2253,7 +2311,10 @@ private fun AutoMiniFloatingWindowCustomizationSection(
                             color = if (isSelected) primaryColor else Color(0xFF1E293B),
                             shape = RoundedCornerShape(9.dp)
                         )
-                        .clickable { onSelectFloatingStyle(itemStyle) }
+                        .clickable {
+                            haptics.tap()
+                            onSelectFloatingStyle(itemStyle)
+                        }
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                         .testTag("framegen_floating_style_${itemStyle.name.lowercase(Locale.US)}"),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -2349,7 +2410,10 @@ private fun AutoMiniFloatingWindowCustomizationSection(
                             color = if (isSelected) secondaryColor else Color(0xFF1E293B),
                             shape = RoundedCornerShape(8.dp)
                         )
-                        .clickable { onSelectFloatingSize(sizeOption) }
+                        .clickable {
+                            haptics.tap()
+                            onSelectFloatingSize(sizeOption)
+                        }
                         .padding(vertical = 8.dp, horizontal = 4.dp)
                         .testTag("framegen_floating_size_${sizeOption.name.lowercase(Locale.US)}"),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -2658,6 +2722,7 @@ private fun SettingsToggleRow(
     onCheckedChange: (Boolean) -> Unit,
     tag: String
 ) {
+    val haptics = LocalDragonHaptics.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -2679,7 +2744,10 @@ private fun SettingsToggleRow(
         Spacer(modifier = Modifier.width(12.dp))
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = {
+                haptics.toggle(it)
+                onCheckedChange(it)
+            },
             modifier = Modifier.testTag(tag)
         )
     }
@@ -2693,6 +2761,7 @@ private fun FrameGenHardwareDetectionCard(
     cardCorner: RoundedCornerShape,
     onRescanHardware: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var expanded by rememberSaveable { mutableStateOf(false) }
 
     CompactExpandableFrameGenCard(
@@ -2705,7 +2774,10 @@ private fun FrameGenHardwareDetectionCard(
         onToggleExpand = { expanded = !expanded },
         headerAction = {
             OutlinedButton(
-                onClick = onRescanHardware,
+                onClick = {
+                    haptics.heavyAction()
+                    onRescanHardware()
+                },
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                 modifier = Modifier
                     .height(28.dp)
@@ -2794,6 +2866,7 @@ private fun FrameGenGameCompatibilityAndArchitectureCard(
     onRemoveGame: (String) -> Unit,
     onOpenAddGameDialog: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var expanded by rememberSaveable { mutableStateOf(false) }
 
     CompactExpandableFrameGenCard(
@@ -2894,8 +2967,13 @@ private fun FrameGenGameCompatibilityAndArchitectureCard(
                                 RoundedCornerShape(6.dp)
                             )
                             .clickable {
-                                if (isAdded) onRemoveGame(game.packageName)
-                                else onAddGame(game.packageName, game.appName)
+                                if (isAdded) {
+                                    haptics.warning()
+                                    onRemoveGame(game.packageName)
+                                } else {
+                                    haptics.confirm()
+                                    onAddGame(game.packageName, game.appName)
+                                }
                             }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
@@ -2969,6 +3047,7 @@ fun LosslessDllMasterCard(
     onInspectPe: () -> Unit,
     onRemoveDll: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var expanded by rememberSaveable { mutableStateOf(false) }
     val goldColor = Color(0xFFFFD700)
     val emeraldColor = Color(0xFF00E676)
@@ -3140,7 +3219,10 @@ fun LosslessDllMasterCard(
                         }
                         Switch(
                             checked = config.losslessDllActive,
-                            onCheckedChange = onToggleActive,
+                            onCheckedChange = {
+                                haptics.toggle(it)
+                                onToggleActive(it)
+                            },
                             modifier = Modifier.scale(0.8f),
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = goldColor,
@@ -3172,7 +3254,10 @@ fun LosslessDllMasterCard(
                         }
                         Switch(
                             checked = config.losslessAntiGhosting,
-                            onCheckedChange = onToggleAntiGhosting,
+                            onCheckedChange = {
+                                haptics.toggle(it)
+                                onToggleAntiGhosting(it)
+                            },
                             enabled = config.losslessDllActive,
                             modifier = Modifier.scale(0.8f),
                             colors = SwitchDefaults.colors(
@@ -3205,7 +3290,10 @@ fun LosslessDllMasterCard(
                         }
                         Switch(
                             checked = config.losslessBicubicWarp,
-                            onCheckedChange = onToggleBicubicWarp,
+                            onCheckedChange = {
+                                haptics.toggle(it)
+                                onToggleBicubicWarp(it)
+                            },
                             enabled = config.losslessDllActive,
                             modifier = Modifier.scale(0.8f),
                             colors = SwitchDefaults.colors(
@@ -3238,7 +3326,10 @@ fun LosslessDllMasterCard(
                         }
                         Switch(
                             checked = config.losslessReflexPacing,
-                            onCheckedChange = onToggleReflexPacing,
+                            onCheckedChange = {
+                                haptics.toggle(it)
+                                onToggleReflexPacing(it)
+                            },
                             enabled = config.losslessDllActive,
                             modifier = Modifier.scale(0.8f),
                             colors = SwitchDefaults.colors(
@@ -3257,7 +3348,10 @@ fun LosslessDllMasterCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = onInspectPe,
+                        onClick = {
+                            haptics.confirm()
+                            onInspectPe()
+                        },
                         modifier = Modifier
                             .weight(1.2f)
                             .height(36.dp),
@@ -3279,7 +3373,10 @@ fun LosslessDllMasterCard(
                     }
 
                     OutlinedButton(
-                        onClick = onImportClick,
+                        onClick = {
+                            haptics.tap()
+                            onImportClick()
+                        },
                         modifier = Modifier
                             .weight(1.1f)
                             .height(36.dp),
@@ -3296,7 +3393,10 @@ fun LosslessDllMasterCard(
                     }
 
                     OutlinedButton(
-                        onClick = onRemoveDll,
+                        onClick = {
+                            haptics.warning()
+                            onRemoveDll()
+                        },
                         modifier = Modifier
                             .weight(0.9f)
                             .height(36.dp),
@@ -3326,7 +3426,10 @@ fun LosslessDllMasterCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = onImportClick,
+                        onClick = {
+                            haptics.confirm()
+                            onImportClick()
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .height(40.dp)
@@ -3350,7 +3453,10 @@ fun LosslessDllMasterCard(
                     }
 
                     OutlinedButton(
-                        onClick = onLoadBuiltin,
+                        onClick = {
+                            haptics.confirm()
+                            onLoadBuiltin()
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .height(40.dp)
@@ -3415,6 +3521,7 @@ fun LosslessPeInspectionDialog(
     secondaryColor: Color,
     onDismiss: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     val goldColor = Color(0xFFFFD700)
     val emeraldColor = Color(0xFF00E676)
     val scrollState = rememberScrollState()
@@ -3467,7 +3574,10 @@ fun LosslessPeInspectionDialog(
                     }
 
                     IconButton(
-                        onClick = onDismiss,
+                        onClick = {
+                            haptics.tap()
+                            onDismiss()
+                        },
                         modifier = Modifier.size(28.dp)
                     ) {
                         Icon(
@@ -3652,7 +3762,10 @@ fun LosslessPeInspectionDialog(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Button(
-                    onClick = onDismiss,
+                    onClick = {
+                        haptics.tap()
+                        onDismiss()
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(38.dp),

@@ -29,6 +29,7 @@ import com.example.data.model.AdBlockerMode
 import com.example.data.model.AdBlockerTelemetry
 import com.example.data.model.SocialPlatform
 import com.example.data.repository.KernelRepository
+import com.example.ui.haptics.LocalDragonHaptics
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -38,6 +39,7 @@ import java.util.Locale
 fun AdBlockerSection(
     repository: KernelRepository
 ) {
+    val haptics = LocalDragonHaptics.current
     val config by repository.adBlockerConfigFlow.collectAsState()
     val telemetry by repository.adBlockerTelemetryFlow.collectAsState()
 
@@ -125,7 +127,10 @@ fun AdBlockerSection(
 
                     Switch(
                         checked = config.isGlobalEnabled,
-                        onCheckedChange = { repository.toggleAdBlockerGlobal(it) },
+                        onCheckedChange = {
+                            haptics.toggle(it)
+                            repository.toggleAdBlockerGlobal(it)
+                        },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color(0xFF00E676),
                             checkedTrackColor = Color(0xFF00E676).copy(alpha = 0.35f)
@@ -188,7 +193,10 @@ fun AdBlockerSection(
                         modifier = Modifier.weight(1f)
                     )
                     TextButton(
-                        onClick = { repository.syncAdBlockerVerificationStatus() },
+                        onClick = {
+                            haptics.confirm()
+                            repository.syncAdBlockerVerificationStatus()
+                        },
                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
                         modifier = Modifier.height(24.dp)
                     ) {
@@ -324,7 +332,10 @@ fun AdBlockerSection(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = { repository.grantLsposedPermissionsAndSync() },
+                        onClick = {
+                            haptics.confirm()
+                            repository.grantLsposedPermissionsAndSync()
+                        },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
@@ -335,7 +346,10 @@ fun AdBlockerSection(
                     }
 
                     OutlinedButton(
-                        onClick = { repository.openLsposedManager() },
+                        onClick = {
+                            haptics.tap()
+                            repository.openLsposedManager()
+                        },
                         shape = RoundedCornerShape(10.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
                     ) {
@@ -429,7 +443,10 @@ fun AdBlockerSection(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
-                            onClick = { repository.openAccessibilitySettings() },
+                            onClick = {
+                                haptics.tap()
+                                repository.openAccessibilitySettings()
+                            },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                             shape = RoundedCornerShape(8.dp)
                         ) {
@@ -540,7 +557,10 @@ fun AdBlockerSection(
 
                 Switch(
                     checked = config.autoActivateOnSocialApps,
-                    onCheckedChange = { repository.setAdBlockerAutoActivate(it) },
+                    onCheckedChange = {
+                        haptics.toggle(it)
+                        repository.setAdBlockerAutoActivate(it)
+                    },
                     modifier = Modifier.scale(0.85f)
                 )
             }
@@ -617,7 +637,10 @@ fun AdBlockerSection(
                                 if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
                                 else Color.Transparent
                             )
-                            .clickable { repository.setAdBlockerMode(mode) }
+                            .clickable {
+                                haptics.tap()
+                                repository.setAdBlockerMode(mode)
+                            }
                             .padding(horizontal = 8.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -637,7 +660,10 @@ fun AdBlockerSection(
                         }
                         RadioButton(
                             selected = isSelected,
-                            onClick = { repository.setAdBlockerMode(mode) }
+                            onClick = {
+                                haptics.tap()
+                                repository.setAdBlockerMode(mode)
+                            }
                         )
                     }
                 }
@@ -671,7 +697,10 @@ fun AdBlockerSection(
                         val isSelected = config.customDnsProvider.equals(dns, ignoreCase = true)
                         FilterChip(
                             selected = isSelected,
-                            onClick = { repository.setAdBlockerDnsProvider(dns) },
+                            onClick = {
+                                haptics.tap()
+                                repository.setAdBlockerDnsProvider(dns)
+                            },
                             label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
                         )
                     }
@@ -692,7 +721,10 @@ fun AdBlockerSection(
                     )
 
                     OutlinedButton(
-                        onClick = { repository.flushAdBlockerDns() },
+                        onClick = {
+                            haptics.heavyAction()
+                            repository.flushAdBlockerDns()
+                        },
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
@@ -838,7 +870,10 @@ fun AdBlockerSection(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = { repository.purgePreloadedSocialAdCaches("Facebook") },
+                        onClick = {
+                            haptics.heavyAction()
+                            repository.purgePreloadedSocialAdCaches("Facebook")
+                        },
                         modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         colors = ButtonDefaults.buttonColors(
@@ -855,7 +890,10 @@ fun AdBlockerSection(
                     }
 
                     OutlinedButton(
-                        onClick = { repository.purgePreloadedSocialAdCaches(null) },
+                        onClick = {
+                            haptics.heavyAction()
+                            repository.purgePreloadedSocialAdCaches(null)
+                        },
                         modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                     ) {
@@ -1012,6 +1050,7 @@ fun AdBlockerSection(
                     Button(
                         onClick = {
                             if (newBlacklistDomainInput.isNotBlank()) {
+                                haptics.confirm()
                                 repository.addCustomBlacklistDomain(newBlacklistDomainInput)
                                 newBlacklistDomainInput = ""
                             }
@@ -1032,7 +1071,10 @@ fun AdBlockerSection(
                         config.customBlacklistDomains.forEach { domain ->
                             InputChip(
                                 selected = true,
-                                onClick = { repository.removeCustomBlacklistDomain(domain) },
+                                onClick = {
+                                    haptics.warning()
+                                    repository.removeCustomBlacklistDomain(domain)
+                                },
                                 label = { Text(domain, fontSize = 10.sp) },
                                 trailingIcon = {
                                     Icon(
@@ -1078,6 +1120,7 @@ private fun SocialPlatformRow(
     isEnabled: Boolean,
     onToggle: (Boolean) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var expanded by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -1089,7 +1132,10 @@ private fun SocialPlatformRow(
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .clickable { expanded = !expanded }
+                    .clickable {
+                        haptics.tap()
+                        expanded = !expanded
+                    }
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1126,7 +1172,10 @@ private fun SocialPlatformRow(
 
             Switch(
                 checked = isEnabled,
-                onCheckedChange = onToggle
+                onCheckedChange = {
+                    haptics.toggle(it)
+                    onToggle(it)
+                }
             )
         }
 
@@ -1166,6 +1215,7 @@ private fun FilterSwitchRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1186,7 +1236,10 @@ private fun FilterSwitchRow(
         }
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange
+            onCheckedChange = {
+                haptics.toggle(it)
+                onCheckedChange(it)
+            }
         )
     }
 }

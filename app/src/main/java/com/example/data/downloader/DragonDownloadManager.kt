@@ -16,6 +16,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +41,7 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 class DragonDownloadManager(
     private val context: Context,
@@ -47,14 +50,17 @@ class DragonDownloadManager(
 ) {
     private val prefs = context.getSharedPreferences("dragon_universal_downloader", Context.MODE_PRIVATE)
 
-    val httpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(25, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .retryOnConnectionFailure(true)
-        .build()
+    val warpDns = CloudflareWarpDns(
+        initialEnabled = prefs.getBoolean("cloudflare_warp_dns_enabled_v2", false)
+    )
+
+    private val _warpDnsEnabledFlow = MutableStateFlow(warpDns.isEnabled)
+    val warpDnsEnabledFlow: StateFlow<Boolean> = _warpDnsEnabledFlow.asStateFlow()
+
+    val warpDnsTelemetryFlow: StateFlow<WarpDnsTelemetry> = warpDns.telemetryFlow
+
+    val httpClient: OkHttpClient = IdmAcceleratedDownloader.createFastOkHttpClient(dns = warpDns)
+    private val idmDownloader = IdmAcceleratedDownloader(httpClient)
 
     val backendApiClient = BackendApiClient(httpClient)
     val webViewExtractor = WebViewMediaExtractor(context)
@@ -66,6 +72,9 @@ class DragonDownloadManager(
     private val _backendUrlFlow = MutableStateFlow(prefs.getString("custom_backend_url", "") ?: "")
     val backendUrlFlow: StateFlow<String> = _backendUrlFlow.asStateFlow()
 
+    private val _maxConnectionsFlow = MutableStateFlow(prefs.getInt("idm_max_connections", 8).coerceIn(1, 16))
+    val maxConnectionsFlow: StateFlow<Int> = _maxConnectionsFlow.asStateFlow()
+
     private val _activeBatchSessionFlow = MutableStateFlow<BatchSession?>(null)
     val activeBatchSessionFlow: StateFlow<BatchSession?> = _activeBatchSessionFlow.asStateFlow()
 
@@ -74,6 +83,37 @@ class DragonDownloadManager(
 
     init {
         loadPersistedTasks()
+        if (warpDns.isEnabled) {
+            warpDns.prewarmCommonHosts(scope)
+        }
+    }
+
+    fun setWarpDnsEnabled(enabled: Boolean) {
+        prefs.edit()
+            .putBoolean("cloudflare_warp_dns_enabled_v2", enabled)
+            .putBoolean("cloudflare_warp_dns_enabled", enabled)
+            .apply()
+        warpDns.setEnabled(enabled)
+        _warpDnsEnabledFlow.value = enabled
+        if (enabled) {
+            warpDns.prewarmCommonHosts(scope)
+            onFeedback("Cloudflare WARP DNS (1.1.1.1) ON • Accelerated DoH + 0ms multi-thread DNS cache active")
+        } else {
+            onFeedback("Cloudflare WARP DNS OFF • Using standard system DNS")
+        }
+    }
+
+    fun toggleWarpDns(): Boolean {
+        val next = !_warpDnsEnabledFlow.value
+        setWarpDnsEnabled(next)
+        return next
+    }
+
+    fun setMaxConnections(count: Int) {
+        val clamped = count.coerceIn(1, 16)
+        prefs.edit().putInt("idm_max_connections", clamped).apply()
+        _maxConnectionsFlow.value = clamped
+        onFeedback("IDM Multi-Connection Accelerator set to ${clamped}x parallel threads")
     }
 
     fun setCustomBackendUrl(url: String) {
@@ -118,13 +158,49 @@ class DragonDownloadManager(
         }
     }
 
+    companion object {
+        const val DRAGON_TOOL_ROOT_FOLDER = "DragonTool"
+        const val DRAGON_TOOL_DISPLAY_PATH = "Downloads/DragonTool"
+
+        fun subFolderForType(isAudioOnly: Boolean, isGenericFile: Boolean): String {
+            return when {
+                isGenericFile -> "DragonTool/Files"
+                isAudioOnly -> "DragonTool/Audio"
+                else -> "DragonTool/Videos"
+            }
+        }
+
+        fun displayFolderForType(isAudioOnly: Boolean, isGenericFile: Boolean): String {
+            return "Downloads/${subFolderForType(isAudioOnly, isGenericFile)}"
+        }
+    }
+
+    fun ensureDragonToolDirectories() {
+        listOf("DragonTool/Videos", "DragonTool/Audio", "DragonTool/Files").forEach { sub ->
+            try {
+                File(
+                    context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir,
+                    sub
+                ).mkdirs()
+            } catch (_: Exception) {}
+        }
+    }
+
     fun startDownload(
         mediaInfo: MediaInfo,
         format: MediaFormatOption,
-        batchSessionId: String? = null
+        batchSessionId: String? = null,
+        customFilename: String? = null
     ): String {
+        ensureDragonToolDirectories()
         val taskId = UUID.randomUUID().toString()
-        val ext = format.container.lowercase(Locale.US).ifBlank { if (format.isAudioOnly) "m4a" else "mp4" }
+        val ext = format.container.lowercase(Locale.US).ifBlank {
+            when {
+                format.isAudioOnly -> "m4a"
+                format.isGenericFile -> "bin"
+                else -> "mp4"
+            }
+        }
         val mimeType = when (ext) {
             "mp3" -> "audio/mpeg"
             "m4a" -> "audio/mp4"
@@ -134,21 +210,27 @@ class DragonDownloadManager(
             "ogg", "opus" -> "audio/ogg"
             "webm" -> if (format.isAudioOnly) "audio/webm" else "video/webm"
             "mkv" -> "video/x-matroska"
-            else -> "video/mp4"
+            else -> if (format.isGenericFile) {
+                format.mimeType.ifBlank { "application/octet-stream" }
+            } else {
+                "video/mp4"
+            }
         }
 
         val uniqueFilename = buildUniqueFilename(
             title = mediaInfo.title,
             qualityLabel = format.qualityLabel,
             ext = ext,
-            isAudioOnly = format.isAudioOnly
+            isAudioOnly = format.isAudioOnly,
+            isGenericFile = format.isGenericFile,
+            customFilename = customFilename
         )
 
         val estimatedTotal = format.calculateBytes(mediaInfo.durationSeconds)
-        val initialStage = if (format.isAudioOnly) {
-            DownloadStateStage.DOWNLOADING_AUDIO
-        } else {
-            DownloadStateStage.DOWNLOADING_VIDEO
+        val initialStage = when {
+            format.isGenericFile -> DownloadStateStage.DOWNLOADING_FILE
+            format.isAudioOnly -> DownloadStateStage.DOWNLOADING_AUDIO
+            else -> DownloadStateStage.DOWNLOADING_VIDEO
         }
 
         val newTask = DownloaderTask(
@@ -169,7 +251,9 @@ class DragonDownloadManager(
             progress = 0.02f,
             totalBytes = estimatedTotal,
             isTotalSizeEstimated = format.isEstimatedSize || estimatedTotal <= 0L,
-            batchSessionId = batchSessionId
+            batchSessionId = batchSessionId,
+            isGenericFile = format.isGenericFile,
+            activeConnections = _maxConnectionsFlow.value
         )
 
         _tasksFlow.value = listOf(newTask) + _tasksFlow.value
@@ -202,6 +286,39 @@ class DragonDownloadManager(
                 // If using Backend API job pipeline
                 if (customBackendUrl != null && fmt.streamUrl.startsWith(customBackendUrl)) {
                     executeBackendJobDownload(task, customBackendUrl, tempProcessedFile)
+                } else if (task.isGenericFile) {
+                    // UNIVERSAL IDM MULTI-CONNECTION FILE DOWNLOAD PIPELINE
+                    updateTask(taskId) {
+                        it.copy(
+                            stage = DownloadStateStage.DOWNLOADING_FILE,
+                            speedFormatted = "Connecting (${_maxConnectionsFlow.value}x)..."
+                        )
+                    }
+
+                    var lastStreamError: Exception? = null
+                    val dlOk = downloadStreamWithFailover(
+                        taskId = taskId,
+                        primaryUrl = fmt.streamUrl,
+                        fallbackUrls = fmt.fallbackStreamUrls,
+                        headers = fmt.requestHeaders,
+                        destFile = tempProcessedFile,
+                        isAudioOnly = false,
+                        isGenericFile = true,
+                        progressWeightStart = 0.0f,
+                        progressWeightSpan = 0.96f,
+                        knownTotalBytes = if (fmt.isEstimatedSize) -1L else fmt.contentLengthBytes,
+                        onLastError = { err -> lastStreamError = err }
+                    )
+
+                    if (!dlOk || !tempProcessedFile.exists() || tempProcessedFile.length() <= 0L) {
+                        val err = lastStreamError
+                        if (err is ExtractorException) throw err
+                        throw ExtractorException(
+                            DownloaderErrorType.DOWNLOAD_INTERRUPTED,
+                            err?.message?.takeIf { it.isNotBlank() }
+                                ?: "Unable to download ${task.filename}. Verify the link is reachable and try again."
+                        )
+                    }
                 } else if (task.isAudioOnly) {
                     // AUDIO DOWNLOAD PIPELINE (supports M4A, MP3, AAC, WAV, FLAC, OGG/Opus, WebM)
                     updateTask(taskId) {
@@ -217,7 +334,7 @@ class DragonDownloadManager(
                         isAudioOnly = true,
                         progressWeightStart = 0.0f,
                         progressWeightSpan = 0.72f,
-                        knownTotalBytes = fmt.contentLengthBytes
+                        knownTotalBytes = if (fmt.isEstimatedSize) -1L else fmt.contentLengthBytes
                     )
 
                     if (!downloadedSourceOk || !tempPrimaryFile.exists() || tempPrimaryFile.length() < 512L) {
@@ -273,6 +390,15 @@ class DragonDownloadManager(
                             }
                         }
                     } else {
+                        if (task.platform == MediaPlatform.PATREON ||
+                            task.platform == MediaPlatform.BILIBILI ||
+                            task.platform == MediaPlatform.PAWCHIVE
+                        ) {
+                            throw ExtractorException(
+                                DownloaderErrorType.DOWNLOAD_INTERRUPTED,
+                                "Unable to download ${task.platform.displayName} audio stream. Ensure the link is accessible or refresh your session."
+                            )
+                        }
                         MediaProcessingEngine.synthesizePlayableAudioFile(
                             outputFile = tempProcessedFile,
                             container = task.container,
@@ -291,6 +417,15 @@ class DragonDownloadManager(
                         if (tempPrimaryFile.exists() && tempPrimaryFile.length() > 512L) {
                             tempPrimaryFile.copyTo(tempProcessedFile, overwrite = true)
                         } else {
+                            if (task.platform == MediaPlatform.PATREON ||
+                                task.platform == MediaPlatform.BILIBILI ||
+                                task.platform == MediaPlatform.PAWCHIVE
+                            ) {
+                                throw ExtractorException(
+                                    DownloaderErrorType.PROCESSING_FAILURE,
+                                    "Unable to process ${task.platform.displayName} audio stream."
+                                )
+                            }
                             MediaProcessingEngine.synthesizePlayableAudioFile(
                                 outputFile = tempProcessedFile,
                                 container = task.container,
@@ -302,36 +437,86 @@ class DragonDownloadManager(
                         }
                     }
                 } else if (fmt.needsMerging && !fmt.secondaryAudioStreamUrl.isNullOrBlank()) {
-                    // ADAPTIVE VIDEO + AUDIO STREAM DOWNLOAD & MERGE PIPELINE
+                    // ADAPTIVE VIDEO + AUDIO SIMULTANEOUS IDM DOWNLOAD & MERGE PIPELINE
                     updateTask(taskId) {
-                        it.copy(stage = DownloadStateStage.DOWNLOADING_VIDEO, speedFormatted = "Connecting...")
+                        it.copy(
+                            stage = DownloadStateStage.DOWNLOADING_VIDEO,
+                            speedFormatted = "Connecting V+A (${_maxConnectionsFlow.value}x)..."
+                        )
                     }
-                    val vOk = downloadStreamWithFailover(
-                        taskId = taskId,
-                        primaryUrl = fmt.streamUrl,
-                        fallbackUrls = fmt.fallbackStreamUrls,
-                        headers = fmt.requestHeaders,
-                        destFile = tempPrimaryFile,
-                        isAudioOnly = false,
-                        progressWeightStart = 0.0f,
-                        progressWeightSpan = 0.65f,
-                        knownTotalBytes = fmt.contentLengthBytes
-                    )
+                    val vBytesTrack = AtomicLong(0L)
+                    val aBytesTrack = AtomicLong(0L)
+                    val vTotalTrack = AtomicLong(fmt.contentLengthBytes.coerceAtLeast(0L))
+                    val aTotalTrack = AtomicLong(fmt.secondaryAudioContentLength.coerceAtLeast(0L))
+                    val vSpeedTrack = AtomicLong(0L)
+                    val aSpeedTrack = AtomicLong(0L)
 
-                    updateTask(taskId) {
-                        it.copy(stage = DownloadStateStage.DOWNLOADING_AUDIO, speedFormatted = "Fetching audio track...")
+                    fun emitCombinedDashProgress(activeConns: Int, segs: List<Float>, resumable: Boolean) {
+                        val dlSum = vBytesTrack.get() + aBytesTrack.get()
+                        val totSum = vTotalTrack.get() + aTotalTrack.get()
+                        val speedSum = vSpeedTrack.get() + aSpeedTrack.get()
+                        val frac = if (totSum > 0L) (dlSum.toFloat() / totSum.toFloat()).coerceIn(0f, 1f) else 0.5f
+                        val overall = (0.02f + frac * 0.83f).coerceIn(0.02f, 0.85f)
+                        val rem = if (totSum > dlSum) totSum - dlSum else -1L
+                        val etaSec = if (rem > 0L && speedSum > 0L) rem / speedSum else -1L
+                        updateTask(taskId) {
+                            it.copy(
+                                progress = overall,
+                                speedBytesPerSec = speedSum,
+                                speedFormatted = if (activeConns > 1) "${formatBytes(speedSum)}/s (${activeConns}x)" else "${formatBytes(speedSum)}/s",
+                                downloadedBytes = dlSum,
+                                totalBytes = if (totSum > 0L) totSum else it.totalBytes,
+                                isTotalSizeEstimated = totSum <= 0L,
+                                etaSeconds = etaSec,
+                                etaFormatted = formatEtaSeconds(etaSec),
+                                supportsPauseResume = resumable,
+                                activeConnections = activeConns,
+                                segmentProgress = segs
+                            )
+                        }
                     }
-                    val aOk = downloadStreamWithFailover(
-                        taskId = taskId,
-                        primaryUrl = fmt.secondaryAudioStreamUrl,
-                        fallbackUrls = emptyList(),
-                        headers = fmt.requestHeaders,
-                        destFile = tempSecondaryAudioFile,
-                        isAudioOnly = true,
-                        progressWeightStart = 0.65f,
-                        progressWeightSpan = 0.20f,
-                        knownTotalBytes = fmt.secondaryAudioContentLength
-                    )
+
+                    val (vOk, aOk) = coroutineScope {
+                        val videoDeferred = async(Dispatchers.IO) {
+                            downloadStreamWithFailover(
+                                taskId = taskId,
+                                primaryUrl = fmt.streamUrl,
+                                fallbackUrls = fmt.fallbackStreamUrls,
+                                headers = fmt.requestHeaders,
+                                destFile = tempPrimaryFile,
+                                isAudioOnly = false,
+                                progressWeightStart = 0.0f,
+                                progressWeightSpan = 0.65f,
+                                knownTotalBytes = if (fmt.isEstimatedSize) -1L else fmt.contentLengthBytes,
+                                customProgressHandler = { upd ->
+                                    vBytesTrack.set(upd.downloadedBytes)
+                                    if (upd.totalBytes > 0L) vTotalTrack.set(upd.totalBytes)
+                                    vSpeedTrack.set(upd.speedBytesPerSec)
+                                    emitCombinedDashProgress(upd.activeConnections, upd.segmentProgress, upd.supportsResume)
+                                }
+                            )
+                        }
+                        val audioDeferred = async(Dispatchers.IO) {
+                            downloadStreamWithFailover(
+                                taskId = taskId,
+                                primaryUrl = fmt.secondaryAudioStreamUrl,
+                                fallbackUrls = emptyList(),
+                                headers = fmt.requestHeaders,
+                                destFile = tempSecondaryAudioFile,
+                                isAudioOnly = true,
+                                progressWeightStart = 0.65f,
+                                progressWeightSpan = 0.20f,
+                                knownTotalBytes = if (fmt.isEstimatedSize) -1L else fmt.secondaryAudioContentLength,
+                                customProgressHandler = { upd ->
+                                    aBytesTrack.set(upd.downloadedBytes)
+                                    if (upd.totalBytes > 0L) aTotalTrack.set(upd.totalBytes)
+                                    aSpeedTrack.set(upd.speedBytesPerSec)
+                                    emitCombinedDashProgress(upd.activeConnections, upd.segmentProgress, upd.supportsResume)
+                                }
+                            )
+                        }
+                        videoDeferred.await() to audioDeferred.await()
+                    }
 
                     val vBytes = if (tempPrimaryFile.exists()) tempPrimaryFile.length() else 0L
                     val aBytes = if (tempSecondaryAudioFile.exists()) tempSecondaryAudioFile.length() else 0L
@@ -382,6 +567,15 @@ class DragonDownloadManager(
                             false
                         }
                         if (!fallbackOk || !tempProcessedFile.exists() || tempProcessedFile.length() < 1024L) {
+                            if (task.platform == MediaPlatform.PATREON ||
+                                task.platform == MediaPlatform.BILIBILI ||
+                                task.platform == MediaPlatform.PAWCHIVE
+                            ) {
+                                throw ExtractorException(
+                                    DownloaderErrorType.DOWNLOAD_INTERRUPTED,
+                                    "Unable to download ${task.platform.displayName} video/audio streams. Refresh the link or check your session."
+                                )
+                            }
                             MediaProcessingEngine.synthesizePlayableVideoFile(
                                 outputFile = tempProcessedFile,
                                 width = fmt.width.coerceAtLeast(640),
@@ -411,7 +605,7 @@ class DragonDownloadManager(
                         isAudioOnly = false,
                         progressWeightStart = 0.0f,
                         progressWeightSpan = 0.95f,
-                        knownTotalBytes = fmt.contentLengthBytes
+                        knownTotalBytes = if (fmt.isEstimatedSize) -1L else fmt.contentLengthBytes
                     )
 
                     if (!dlOk || !tempProcessedFile.exists() || tempProcessedFile.length() < 1024L) {
@@ -440,6 +634,15 @@ class DragonDownloadManager(
                     }
 
                     if (!dlOk || !tempProcessedFile.exists() || tempProcessedFile.length() < 1024L) {
+                        if (task.platform == MediaPlatform.PATREON ||
+                            task.platform == MediaPlatform.BILIBILI ||
+                            task.platform == MediaPlatform.PAWCHIVE
+                        ) {
+                            throw ExtractorException(
+                                DownloaderErrorType.DOWNLOAD_INTERRUPTED,
+                                "Unable to download the full ${task.platform.displayName} video stream. Verify the link is accessible or refresh the link."
+                            )
+                        }
                         updateTask(taskId) {
                             it.copy(
                                 stage = DownloadStateStage.CONVERTING_MEDIA,
@@ -467,17 +670,35 @@ class DragonDownloadManager(
                     it.copy(
                         stage = DownloadStateStage.VALIDATING_OUTPUT,
                         progress = 0.98f,
-                        speedFormatted = "Verifying container..."
+                        speedFormatted = if (task.isGenericFile) "Verifying file integrity..." else "Verifying container..."
                     )
                 }
 
-                var report = MediaProcessingEngine.validateMediaFile(
-                    file = tempProcessedFile,
-                    expectedAudioOnly = task.isAudioOnly
-                )
+                var report = if (task.isGenericFile) {
+                    MediaProcessingEngine.validateUniversalFile(
+                        file = tempProcessedFile,
+                        expectedExtension = task.container,
+                        expectedMimeType = task.mimeType,
+                        expectedContentLength = if (fmt.isEstimatedSize) -1L else fmt.contentLengthBytes
+                    )
+                } else {
+                    MediaProcessingEngine.validateMediaFile(
+                        file = tempProcessedFile,
+                        expectedAudioOnly = task.isAudioOnly
+                    )
+                }
 
-                if (!report.isValid) {
+                if (!report.isValid && !task.isGenericFile) {
                     tempProcessedFile.delete()
+                    if (task.platform == MediaPlatform.PATREON ||
+                        task.platform == MediaPlatform.BILIBILI ||
+                        task.platform == MediaPlatform.PAWCHIVE
+                    ) {
+                        throw ExtractorException(
+                            DownloaderErrorType.PROCESSING_FAILURE,
+                            report.errorReason ?: "Downloaded ${task.platform.displayName} stream failed media validation."
+                        )
+                    }
                     if (task.isAudioOnly) {
                         MediaProcessingEngine.synthesizePlayableAudioFile(
                             outputFile = tempProcessedFile,
@@ -507,16 +728,17 @@ class DragonDownloadManager(
                     tempProcessedFile.delete()
                     throw ExtractorException(
                         DownloaderErrorType.PROCESSING_FAILURE,
-                        report.errorReason ?: "Validation failed: output media file is invalid or unplayable."
+                        report.errorReason ?: "Validation failed: output file is invalid or incomplete."
                     )
                 }
 
-                // 5. Save verified file to Internal Storage > Download > Dragon Tools > Video (or Audio) and MediaStore
+                // 5. Save verified file to DragonTool folder and MediaStore
                 val savedResult = saveToDragonToolDownloads(
                     sourceFile = tempProcessedFile,
                     filename = task.filename,
                     mimeType = task.mimeType,
-                    isAudioOnly = task.isAudioOnly
+                    isAudioOnly = task.isAudioOnly,
+                    isGenericFile = task.isGenericFile
                 )
 
                 // Clean up temporary work directory
@@ -534,18 +756,19 @@ class DragonDownloadManager(
                         isTotalSizeEstimated = false,
                         etaSeconds = 0L,
                         etaFormatted = "Done",
+                        segmentProgress = emptyList(),
                         filePath = savedResult.first.absolutePath,
                         publicUriString = savedResult.second?.toString(),
-                        verifiedResolution = report.resolutionLabel,
+                        verifiedResolution = if (task.isGenericFile) "${task.container.uppercase(Locale.US)} File" else report.resolutionLabel,
                         verifiedDuration = report.durationFormatted,
-                        verifiedCodec = report.codecSummary,
+                        verifiedCodec = if (task.isGenericFile) task.mimeType else report.codecSummary,
                         errorType = null,
                         errorMessage = null
                     )
                 }
                 persistTasks()
-                val subDirName = if (task.isAudioOnly) "Audio" else "Video"
-                onFeedback("Saved to Internal Storage > Download > Dragon Tools > $subDirName: ${task.filename} (${formatBytes(finalBytes)})")
+                val folderLabel = displayFolderForType(task.isAudioOnly, task.isGenericFile)
+                onFeedback("Saved to $folderLabel: ${task.filename} (${formatBytes(finalBytes)})")
             } catch (ce: CancellationException) {
                 val current = _tasksFlow.value.find { it.id == taskId }
                 if (current == null) {
@@ -647,10 +870,10 @@ class DragonDownloadManager(
     }
 
     /**
-     * Attempts to download from primaryUrl and fallbackUrls belonging strictly to the fetched media item.
-     * Respects pause/cancellation and updates progress smoothly.
+     * Attempts to download from primaryUrl and fallbackUrls belonging strictly to the fetched item.
+     * Uses IDM multi-connection Range acceleration when supported and respects pause/cancellation.
      */
-    private fun downloadStreamWithFailover(
+    private suspend fun downloadStreamWithFailover(
         taskId: String,
         primaryUrl: String,
         fallbackUrls: List<String>,
@@ -659,7 +882,10 @@ class DragonDownloadManager(
         isAudioOnly: Boolean,
         progressWeightStart: Float,
         progressWeightSpan: Float,
-        knownTotalBytes: Long
+        knownTotalBytes: Long,
+        isGenericFile: Boolean = false,
+        customProgressHandler: ((IdmAcceleratedDownloader.IdmProgressUpdate) -> Unit)? = null,
+        onLastError: ((Exception) -> Unit)? = null
     ): Boolean {
         val candidateUrls = LinkedHashSet<String>().apply {
             if (primaryUrl.isNotBlank()) add(primaryUrl)
@@ -683,29 +909,74 @@ class DragonDownloadManager(
                     destFile = destFile,
                     progressWeightStart = progressWeightStart,
                     progressWeightSpan = progressWeightSpan,
-                    knownTotalBytes = if (index == 0) knownTotalBytes else -1L
+                    knownTotalBytes = if (index == 0) knownTotalBytes else -1L,
+                    isGenericFile = isGenericFile,
+                    customProgressHandler = customProgressHandler
                 )
-                val minExpectedBytes = if (isAudioOnly) 512L else 1024L
+                val minExpectedBytes = when {
+                    isGenericFile -> 1L
+                    isAudioOnly -> 512L
+                    else -> 1024L
+                }
                 if (bytes >= minExpectedBytes && destFile.exists() && destFile.length() >= minExpectedBytes) {
                     return true
                 }
             } catch (ce: CancellationException) {
                 throw ce
-            } catch (_: Exception) {
-                // Automatically try next extracted stream URL of the same media item
+            } catch (e: Exception) {
+                onLastError?.invoke(e)
+                // Automatically try next extracted URL of the same item
             }
         }
         return false
     }
 
-    private fun downloadStreamToFile(
+    private fun buildScopedStreamHeaders(
+        targetUrl: String,
+        baseHeaders: Map<String, String>
+    ): Map<String, String> {
+        val isGoogleVideoCdn = targetUrl.contains("googlevideo.com", ignoreCase = true)
+        val isForeignCdn = isGoogleVideoCdn ||
+            targetUrl.contains("stream.mux.com", ignoreCase = true) ||
+            targetUrl.contains("akamaized.net", ignoreCase = true) ||
+            targetUrl.contains("vimeocdn.com", ignoreCase = true) ||
+            targetUrl.contains("bilivideo.com", ignoreCase = true) ||
+            targetUrl.contains("bilivideo.cn", ignoreCase = true) ||
+            targetUrl.contains("b-cdn.net", ignoreCase = true) ||
+            targetUrl.contains("r2.dev", ignoreCase = true) ||
+            targetUrl.contains("mediadelivery.net", ignoreCase = true) ||
+            targetUrl.contains("cloudflarestorage.com", ignoreCase = true)
+
+        val out = LinkedHashMap<String, String>()
+        out["User-Agent"] = baseHeaders["User-Agent"] ?: MediaExtractionEngine.MOBILE_USER_AGENT
+        out["Accept"] = "*/*"
+
+        if (!isForeignCdn) {
+            val streamCookies = webViewExtractor.getCookiesForUrl(targetUrl)
+            if (!streamCookies.isNullOrBlank()) {
+                out["Cookie"] = streamCookies
+            }
+        }
+        baseHeaders.forEach { (k, v) ->
+            if (!isForeignCdn || (!k.equals("Cookie", ignoreCase = true) &&
+                (!isGoogleVideoCdn || (!k.equals("Origin", ignoreCase = true) && !k.equals("Referer", ignoreCase = true))))
+            ) {
+                out[k] = v
+            }
+        }
+        return out
+    }
+
+    private suspend fun downloadStreamToFile(
         taskId: String,
         streamUrl: String,
         headers: Map<String, String>,
         destFile: File,
         progressWeightStart: Float,
         progressWeightSpan: Float,
-        knownTotalBytes: Long
+        knownTotalBytes: Long,
+        isGenericFile: Boolean = false,
+        customProgressHandler: ((IdmAcceleratedDownloader.IdmProgressUpdate) -> Unit)? = null
     ): Long {
         if (streamUrl.contains("#dragon_stream_") || streamUrl.contains("/embed/", ignoreCase = true)) {
             return 0L
@@ -735,162 +1006,83 @@ class DragonDownloadManager(
             )
         }
 
-        val existingBytes = if (destFile.exists()) destFile.length() else 0L
-        val isGoogleVideoCdn = normalizedUrl.contains("googlevideo.com", ignoreCase = true)
+        val workDir = destFile.parentFile ?: File(context.cacheDir, "downloader_work/$taskId").apply { mkdirs() }
+        val extLower = destFile.extension.lowercase(Locale.US)
+        val rejectHtml = !isGenericFile || extLower !in setOf("html", "htm", "xhtml", "svg", "xml")
 
-        fun buildRequest(includeRangeHeader: Boolean): Request {
-            val reqBuilder = Request.Builder()
-                .url(normalizedUrl)
-                .header("User-Agent", headers["User-Agent"] ?: MediaExtractionEngine.MOBILE_USER_AGENT)
-                .header("Accept", "*/*")
-
-            // Do not send youtube.com cookies to signed googlevideo.com CDN URLs (prevents HTTP 403)
-            if (!isGoogleVideoCdn) {
-                val streamCookies = webViewExtractor.getCookiesForUrl(streamUrl)
-                if (!streamCookies.isNullOrBlank()) {
-                    reqBuilder.header("Cookie", streamCookies)
-                }
+        val progressHandler: (IdmAcceleratedDownloader.IdmProgressUpdate) -> Unit = customProgressHandler ?: { upd ->
+            val streamFraction = if (upd.totalBytes > 0L) {
+                (upd.downloadedBytes.toFloat() / upd.totalBytes.toFloat()).coerceIn(0f, 1f)
+            } else {
+                0.5f
+            }
+            val overallProgress = (progressWeightStart + streamFraction * progressWeightSpan).coerceIn(0.02f, 0.98f)
+            val remainingBytes = if (upd.totalBytes > upd.downloadedBytes) upd.totalBytes - upd.downloadedBytes else -1L
+            val etaSec = if (remainingBytes > 0L && upd.speedBytesPerSec > 0L) remainingBytes / upd.speedBytesPerSec else -1L
+            val speedStr = if (upd.activeConnections > 1) {
+                "${formatBytes(upd.speedBytesPerSec)}/s (${upd.activeConnections}x)"
+            } else {
+                "${formatBytes(upd.speedBytesPerSec)}/s"
             }
 
-            headers.forEach { (k, v) ->
-                if (!isGoogleVideoCdn || (!k.equals("Cookie", ignoreCase = true) && !k.equals("Origin", ignoreCase = true) && !k.equals("Referer", ignoreCase = true))) {
-                    reqBuilder.header(k, v)
-                }
+            updateTask(taskId) {
+                it.copy(
+                    progress = overallProgress,
+                    speedBytesPerSec = upd.speedBytesPerSec,
+                    speedFormatted = speedStr,
+                    downloadedBytes = upd.downloadedBytes,
+                    totalBytes = if (upd.totalBytes > 0L) upd.totalBytes else it.totalBytes,
+                    isTotalSizeEstimated = upd.totalBytes <= 0L,
+                    etaSeconds = etaSec,
+                    etaFormatted = formatEtaSeconds(etaSec),
+                    supportsPauseResume = upd.supportsResume,
+                    activeConnections = upd.activeConnections,
+                    segmentProgress = upd.segmentProgress
+                )
             }
-
-            if (includeRangeHeader) {
-                if (existingBytes > 0L) {
-                    reqBuilder.header("Range", "bytes=$existingBytes-")
-                } else if (isGoogleVideoCdn && !streamUrl.contains("range=")) {
-                    reqBuilder.header("Range", "bytes=0-")
-                }
-            }
-            return reqBuilder.build()
         }
 
-        var response = httpClient.newCall(buildRequest(includeRangeHeader = true)).execute()
-        if ((response.code == 403 || response.code == 416) && (existingBytes > 0L || isGoogleVideoCdn)) {
-            response.close()
-            if (existingBytes > 0L && destFile.exists()) {
-                destFile.delete()
-            }
-            response = httpClient.newCall(buildRequest(includeRangeHeader = false)).execute()
-        }
+        val outcome = idmDownloader.downloadWithAcceleration(
+            url = normalizedUrl,
+            destFile = destFile,
+            workDir = workDir,
+            maxConnections = _maxConnectionsFlow.value,
+            knownTotalBytes = knownTotalBytes,
+            rejectHtml = rejectHtml,
+            requestHeadersProvider = { targetUrl -> buildScopedStreamHeaders(targetUrl, headers) },
+            isPausedOrCancelled = {
+                val curTask = _tasksFlow.value.find { it.id == taskId }
+                curTask == null || curTask.stage == DownloadStateStage.PAUSED
+            },
+            onProgress = progressHandler
+        )
 
-        response.use { resp ->
-            if (resp.code == 403 || resp.code == 410) {
-                throw ExtractorException(
-                    DownloaderErrorType.EXPIRED_LINK,
-                    "Media stream link returned HTTP ${resp.code}"
+        return when (outcome) {
+            is IdmAcceleratedDownloader.DownloadOutcome.HlsManifestDetected -> {
+                downloadHlsPlaylistContentToFile(
+                    taskId = taskId,
+                    playlistUrl = outcome.resolvedUrl,
+                    playlistText = outcome.playlistText,
+                    headers = headers,
+                    destFile = destFile,
+                    progressWeightStart = progressWeightStart,
+                    progressWeightSpan = progressWeightSpan
                 )
             }
-            if (!resp.isSuccessful && resp.code != 206) {
-                throw ExtractorException(
-                    DownloaderErrorType.NETWORK_FAILURE,
-                    "Stream server returned HTTP ${resp.code}: ${resp.message}"
-                )
-            }
-
-            val contentType = resp.header("Content-Type") ?: ""
-            if (contentType.contains("mpegurl", ignoreCase = true) || contentType.contains("vnd.apple.mpegurl", ignoreCase = true)) {
-                val playlistText = resp.body?.string() ?: ""
-                if (playlistText.contains("#EXTM3U")) {
-                    return downloadHlsPlaylistContentToFile(
-                        taskId = taskId,
-                        playlistUrl = streamUrl,
-                        playlistText = playlistText,
-                        headers = headers,
-                        destFile = destFile,
-                        progressWeightStart = progressWeightStart,
-                        progressWeightSpan = progressWeightSpan
-                    )
-                }
-            }
-            if (contentType.contains("text/html", ignoreCase = true)) {
-                throw ExtractorException(
-                    DownloaderErrorType.UNSUPPORTED_MEDIA,
-                    "Server returned an HTML page instead of a binary media stream."
-                )
-            }
-
-            val currentExistingBytes = if (destFile.exists()) destFile.length() else 0L
-            val isResumeSupported = resp.code == 206 && currentExistingBytes > 0L
-            val startByteOffset = if (isResumeSupported) currentExistingBytes else 0L
-            val body = resp.body ?: throw ExtractorException(DownloaderErrorType.NETWORK_FAILURE, "Empty stream body.")
-            val responseContentLength = body.contentLength()
-            val totalStreamBytes = when {
-                isResumeSupported && responseContentLength > 0L -> currentExistingBytes + responseContentLength
-                responseContentLength > 0L -> responseContentLength
-                knownTotalBytes > 0L -> knownTotalBytes
-                else -> -1L
-            }
-
-            FileOutputStream(destFile, isResumeSupported).use { fos ->
-                val input = body.byteStream()
-                val buffer = ByteArray(32 * 1024)
-                var downloaded = startByteOffset
-                var lastReportMs = SystemClock.elapsedRealtime()
-                var bytesAtLastReport = downloaded
-
-                while (true) {
-                    val curTask = _tasksFlow.value.find { it.id == taskId }
-                    if (curTask == null || curTask.stage == DownloadStateStage.PAUSED) {
-                        throw CancellationException("Download paused or cancelled")
-                    }
-
-                    val read = input.read(buffer)
-                    if (read == -1) break
-                    fos.write(buffer, 0, read)
-                    downloaded += read
-
-                    val now = SystemClock.elapsedRealtime()
-                    val elapsedMs = now - lastReportMs
-                    if (elapsedMs >= 140L) {
-                        val deltaBytes = downloaded - bytesAtLastReport
-                        val speedBps = if (elapsedMs > 0) (deltaBytes * 1000L) / elapsedMs else 0L
-                        val speedStr = "${formatBytes(speedBps)}/s"
-
-                        val streamFraction = if (totalStreamBytes > 0L) {
-                            (downloaded.toFloat() / totalStreamBytes.toFloat()).coerceIn(0f, 1f)
-                        } else {
-                            0.5f
-                        }
-                        val overallProgress = (progressWeightStart + streamFraction * progressWeightSpan).coerceIn(0.02f, 0.98f)
-
-                        val remainingBytes = if (totalStreamBytes > downloaded) totalStreamBytes - downloaded else -1L
-                        val etaSec = if (remainingBytes > 0L && speedBps > 0L) remainingBytes / speedBps else -1L
-
-                        updateTask(taskId) {
-                            it.copy(
-                                progress = overallProgress,
-                                speedBytesPerSec = speedBps,
-                                speedFormatted = speedStr,
-                                downloadedBytes = downloaded,
-                                totalBytes = if (totalStreamBytes > 0L) totalStreamBytes else it.totalBytes,
-                                isTotalSizeEstimated = totalStreamBytes <= 0L,
-                                etaSeconds = etaSec,
-                                etaFormatted = formatEtaSeconds(etaSec),
-                                supportsPauseResume = isResumeSupported || resp.header("Accept-Ranges")?.contains("bytes", true) == true
-                            )
-                        }
-                        lastReportMs = now
-                        bytesAtLastReport = downloaded
-                    }
-                }
-                fos.flush()
-
-                // Always emit final stream completion progress so fast downloads don't stay at 0%
+            is IdmAcceleratedDownloader.DownloadOutcome.Completed -> {
                 val finalProgress = (progressWeightStart + progressWeightSpan).coerceIn(0.05f, 0.98f)
-                updateTask(taskId) {
-                    it.copy(
-                        progress = finalProgress,
-                        downloadedBytes = downloaded,
-                        totalBytes = if (totalStreamBytes > 0L) totalStreamBytes else downloaded,
-                        isTotalSizeEstimated = false
-                    )
+                if (customProgressHandler == null) {
+                    updateTask(taskId) {
+                        it.copy(
+                            progress = finalProgress,
+                            downloadedBytes = outcome.downloadedBytes,
+                            totalBytes = if (outcome.downloadedBytes > 0L) outcome.downloadedBytes else it.totalBytes,
+                            isTotalSizeEstimated = false,
+                            activeConnections = outcome.activeConnectionsUsed
+                        )
+                    }
                 }
-
-                return downloaded
+                outcome.downloadedBytes
             }
         }
     }
@@ -907,7 +1099,40 @@ class DragonDownloadManager(
         }
     }
 
-    private fun downloadHlsPlaylistToFile(
+    private fun applyScopedHlsHeaders(
+        targetUrl: String,
+        headers: Map<String, String>,
+        reqBuilder: Request.Builder
+    ) {
+        val host = try {
+            java.net.URI(targetUrl).host?.lowercase(Locale.US) ?: ""
+        } catch (_: Exception) {
+            ""
+        }
+        val allowCookie = host.contains("patreon.com") ||
+            host.contains("patreonusercontent.com") ||
+            host.contains("vimeo.com") ||
+            host.contains("bilibili.tv") ||
+            host.contains("biliintl.com") ||
+            host.contains("bilibili.com") ||
+            host.contains("pawchive.pw") ||
+            host.contains("instagram.com") ||
+            host.contains("facebook.com") ||
+            host.contains("tiktok.com")
+        if (allowCookie) {
+            val cookies = webViewExtractor.getCookiesForUrl(targetUrl)
+            if (!cookies.isNullOrBlank() && !headers.containsKey("Cookie")) {
+                reqBuilder.header("Cookie", cookies)
+            }
+        }
+        headers.forEach { (k, v) ->
+            if (allowCookie || !k.equals("Cookie", ignoreCase = true)) {
+                reqBuilder.header(k, v)
+            }
+        }
+    }
+
+    private suspend fun downloadHlsPlaylistToFile(
         taskId: String,
         playlistUrl: String,
         headers: Map<String, String>,
@@ -921,9 +1146,15 @@ class DragonDownloadManager(
             .url(playlistUrl)
             .header("User-Agent", headers["User-Agent"] ?: MediaExtractionEngine.MOBILE_USER_AGENT)
             .header("Accept", "*/*")
-        headers.forEach { (k, v) -> reqBuilder.header(k, v) }
+        applyScopedHlsHeaders(playlistUrl, headers, reqBuilder)
 
         val playlistText = httpClient.newCall(reqBuilder.build()).execute().use { resp ->
+            if (resp.code == 401 || resp.code == 403) {
+                throw ExtractorException(
+                    DownloaderErrorType.PRIVATE_OR_RESTRICTED,
+                    "Access denied fetching HLS playlist (HTTP ${resp.code})."
+                )
+            }
             if (!resp.isSuccessful) return 0L
             resp.body?.string() ?: ""
         }
@@ -941,7 +1172,7 @@ class DragonDownloadManager(
         )
     }
 
-    private fun downloadHlsPlaylistContentToFile(
+    private suspend fun downloadHlsPlaylistContentToFile(
         taskId: String,
         playlistUrl: String,
         playlistText: String,
@@ -953,15 +1184,45 @@ class DragonDownloadManager(
     ): Long {
         val lines = playlistText.lines().map { it.trim() }.filter { it.isNotEmpty() }
 
-        // Check if this is a Master Playlist with #EXT-X-STREAM-INF variants
+        // Check for DRM-protected playlists (FairPlay / Widevine / SAMPLE-AES)
+        if (lines.any {
+                it.startsWith("#EXT-X-KEY", ignoreCase = true) &&
+                    (it.contains("SAMPLE-AES", ignoreCase = true) ||
+                        it.contains("streamingkeydelivery", ignoreCase = true) ||
+                        it.contains("edef8ba9-79d6-4ace-a3c8-27dcd51d21ed", ignoreCase = true))
+            }
+        ) {
+            throw ExtractorException(
+                DownloaderErrorType.DRM_PROTECTED,
+                "This media stream is DRM-protected and cannot be downloaded."
+            )
+        }
+
+        // Check if this is a Master Playlist with #EXT-X-STREAM-INF variants (and optional separate #EXT-X-MEDIA audio track)
         if (lines.any { it.startsWith("#EXT-X-STREAM-INF", ignoreCase = true) }) {
+            val audioGroupUris = linkedMapOf<String, String>()
+            for (line in lines) {
+                if (line.startsWith("#EXT-X-MEDIA:", ignoreCase = true) && line.contains("TYPE=AUDIO", ignoreCase = true)) {
+                    val gId = Regex("""GROUP-ID="([^"]+)"""").find(line)?.groupValues?.getOrNull(1) ?: "default"
+                    val uri = Regex("""URI="([^"]+)"""").find(line)?.groupValues?.getOrNull(1)
+                    if (!uri.isNullOrBlank()) {
+                        val absAudio = resolveRelativeUrl(playlistUrl, uri)
+                        if (!audioGroupUris.containsKey(gId) || line.contains("DEFAULT=YES", ignoreCase = true)) {
+                            audioGroupUris[gId] = absAudio
+                        }
+                    }
+                }
+            }
+
             var bestBandwidth = -1L
             var bestVariantUrl: String? = null
+            var bestAudioGroup: String? = null
             var i = 0
             while (i < lines.size) {
                 val line = lines[i]
                 if (line.startsWith("#EXT-X-STREAM-INF", ignoreCase = true)) {
                     val bw = Regex("""BANDWIDTH=(\d+)""").find(line)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
+                    val audioGrp = Regex("""AUDIO="([^"]+)"""").find(line)?.groupValues?.getOrNull(1)
                     var j = i + 1
                     while (j < lines.size && lines[j].startsWith("#")) j++
                     if (j < lines.size) {
@@ -969,6 +1230,7 @@ class DragonDownloadManager(
                         if (bw >= bestBandwidth) {
                             bestBandwidth = bw
                             bestVariantUrl = variantUri
+                            bestAudioGroup = audioGrp
                         }
                     }
                     i = j
@@ -976,6 +1238,43 @@ class DragonDownloadManager(
                 i++
             }
             if (!bestVariantUrl.isNullOrBlank()) {
+                val pairedAudioPlaylist = bestAudioGroup?.let { audioGroupUris[it] } ?: audioGroupUris.values.firstOrNull()
+                if (!pairedAudioPlaylist.isNullOrBlank() && depth == 0) {
+                    val tmpVid = File(destFile.parentFile, "hls_vid_${System.currentTimeMillis()}.tmp")
+                    val tmpAud = File(destFile.parentFile, "hls_aud_${System.currentTimeMillis()}.tmp")
+                    try {
+                        val vBytes = downloadHlsPlaylistToFile(
+                            taskId = taskId,
+                            playlistUrl = bestVariantUrl,
+                            headers = headers,
+                            destFile = tmpVid,
+                            progressWeightStart = progressWeightStart,
+                            progressWeightSpan = progressWeightSpan * 0.72f,
+                            depth = depth + 1
+                        )
+                        val aBytes = downloadHlsPlaylistToFile(
+                            taskId = taskId,
+                            playlistUrl = pairedAudioPlaylist,
+                            headers = headers,
+                            destFile = tmpAud,
+                            progressWeightStart = progressWeightStart + progressWeightSpan * 0.72f,
+                            progressWeightSpan = progressWeightSpan * 0.22f,
+                            depth = depth + 1
+                        )
+                        if (vBytes > 1024L && aBytes > 256L &&
+                            MediaProcessingEngine.mergeVideoAndAudioStreams(tmpVid, tmpAud, destFile) {}
+                        ) {
+                            return destFile.length()
+                        }
+                        if (vBytes > 1024L && tmpVid.exists()) {
+                            tmpVid.copyTo(destFile, overwrite = true)
+                            return destFile.length()
+                        }
+                    } finally {
+                        try { tmpVid.delete() } catch (_: Exception) {}
+                        try { tmpAud.delete() } catch (_: Exception) {}
+                    }
+                }
                 return downloadHlsPlaylistToFile(
                     taskId = taskId,
                     playlistUrl = bestVariantUrl,
@@ -988,98 +1287,205 @@ class DragonDownloadManager(
             }
         }
 
-        // Media Playlist: collect optional #EXT-X-MAP init segment and all media segment URLs
-        val segmentUrls = mutableListOf<String>()
+        // Media Playlist: collect optional #EXT-X-MAP init segment, #EXT-X-BYTERANGE, AES-128 key, and all media segment URLs
+        data class HlsSegment(
+            val url: String,
+            val keyUri: String?,
+            val ivHex: String?,
+            val sequenceNumber: Long,
+            val byteRangeStart: Long = -1L,
+            val byteRangeLength: Long = -1L
+        )
+
+        fun parseByteRangeSpec(spec: String, segUrl: String, nextOffsets: MutableMap<String, Long>): Pair<Long, Long>? {
+            val parts = spec.trim().split("@")
+            val len = parts.getOrNull(0)?.trim()?.toLongOrNull() ?: return null
+            if (len <= 0L) return null
+            val start = if (parts.size > 1) {
+                parts[1].trim().toLongOrNull() ?: (nextOffsets[segUrl] ?: 0L)
+            } else {
+                nextOffsets[segUrl] ?: 0L
+            }
+            nextOffsets[segUrl] = start + len
+            return start to len
+        }
+
+        var mediaSequence = 0L
+        var activeKeyMethod: String? = null
+        var activeKeyUri: String? = null
+        var activeIvHex: String? = null
+        var pendingByteRangeSpec: String? = null
+        val nextOffsetByUri = HashMap<String, Long>()
+        val segments = mutableListOf<HlsSegment>()
+
         for (line in lines) {
-            if (line.startsWith("#EXT-X-MAP:", ignoreCase = true)) {
-                val mapUri = Regex("""URI="([^"]+)"""").find(line)?.groupValues?.getOrNull(1)
-                if (!mapUri.isNullOrBlank()) {
-                    segmentUrls.add(resolveRelativeUrl(playlistUrl, mapUri))
+            when {
+                line.startsWith("#EXT-X-MEDIA-SEQUENCE:", ignoreCase = true) -> {
+                    mediaSequence = line.substringAfter(":").trim().toLongOrNull() ?: 0L
                 }
-            } else if (!line.startsWith("#")) {
-                segmentUrls.add(resolveRelativeUrl(playlistUrl, line))
+                line.startsWith("#EXT-X-KEY:", ignoreCase = true) -> {
+                    activeKeyMethod = Regex("""METHOD=([^,\s]+)""").find(line)?.groupValues?.getOrNull(1)?.uppercase(Locale.US)
+                    val rawKeyUri = Regex("""URI="([^"]+)"""").find(line)?.groupValues?.getOrNull(1)
+                    activeKeyUri = if (!rawKeyUri.isNullOrBlank()) resolveRelativeUrl(playlistUrl, rawKeyUri) else null
+                    activeIvHex = Regex("""IV=0x([0-9a-fA-F]+)""").find(line)?.groupValues?.getOrNull(1)
+                    if (activeKeyMethod == "NONE") {
+                        activeKeyUri = null
+                        activeIvHex = null
+                    }
+                }
+                line.startsWith("#EXT-X-BYTERANGE:", ignoreCase = true) -> {
+                    pendingByteRangeSpec = line.substringAfter(":").trim()
+                }
+                line.startsWith("#EXT-X-MAP:", ignoreCase = true) -> {
+                    val mapUri = Regex("""URI="([^"]+)"""").find(line)?.groupValues?.getOrNull(1)
+                    if (!mapUri.isNullOrBlank()) {
+                        val absMapUrl = resolveRelativeUrl(playlistUrl, mapUri)
+                        val mapRangeSpec = Regex("""BYTERANGE="([^"]+)"""").find(line)?.groupValues?.getOrNull(1)
+                        val parsedRange = if (!mapRangeSpec.isNullOrBlank()) {
+                            parseByteRangeSpec(mapRangeSpec, absMapUrl, nextOffsetByUri)
+                        } else null
+                        segments.add(
+                            HlsSegment(
+                                url = absMapUrl,
+                                keyUri = if (activeKeyMethod == "AES-128") activeKeyUri else null,
+                                ivHex = activeIvHex,
+                                sequenceNumber = mediaSequence,
+                                byteRangeStart = parsedRange?.first ?: -1L,
+                                byteRangeLength = parsedRange?.second ?: -1L
+                            )
+                        )
+                    }
+                }
+                !line.startsWith("#") -> {
+                    val absSegUrl = resolveRelativeUrl(playlistUrl, line)
+                    val parsedRange = if (!pendingByteRangeSpec.isNullOrBlank()) {
+                        parseByteRangeSpec(pendingByteRangeSpec!!, absSegUrl, nextOffsetByUri)
+                    } else null
+                    pendingByteRangeSpec = null
+                    segments.add(
+                        HlsSegment(
+                            url = absSegUrl,
+                            keyUri = if (activeKeyMethod == "AES-128") activeKeyUri else null,
+                            ivHex = activeIvHex,
+                            sequenceNumber = mediaSequence++,
+                            byteRangeStart = parsedRange?.first ?: -1L,
+                            byteRangeLength = parsedRange?.second ?: -1L
+                        )
+                    )
+                }
             }
         }
 
-        if (segmentUrls.isEmpty()) return 0L
+        if (segments.isEmpty()) return 0L
 
         if (destFile.exists()) destFile.delete()
-        var totalDownloaded = 0L
-        var lastReportMs = SystemClock.elapsedRealtime()
-        var bytesAtLastReport = 0L
+        val tempRawFile = if (destFile.extension.equals("mp4", ignoreCase = true)) {
+            File(destFile.parentFile, "hls_raw_${taskId.take(6)}_${System.nanoTime()}.tmp")
+        } else {
+            destFile
+        }
 
-        FileOutputStream(destFile, false).use { fos ->
-            val buffer = ByteArray(32 * 1024)
-            for ((segIndex, segUrl) in segmentUrls.withIndex()) {
-                val curTask = _tasksFlow.value.find { it.id == taskId }
-                if (curTask == null || curTask.stage == DownloadStateStage.PAUSED) {
-                    throw CancellationException("Download paused or cancelled")
+        fun buildHlsSegmentHeaders(targetUrl: String): Map<String, String> {
+            val out = LinkedHashMap<String, String>()
+            out["User-Agent"] = headers["User-Agent"] ?: MediaExtractionEngine.MOBILE_USER_AGENT
+            out["Accept"] = "*/*"
+            val host = try {
+                java.net.URI(targetUrl).host?.lowercase(Locale.US) ?: ""
+            } catch (_: Exception) {
+                ""
+            }
+            val allowCookie = host.contains("patreon.com") ||
+                host.contains("patreonusercontent.com") ||
+                host.contains("vimeo.com") ||
+                host.contains("bilibili.tv") ||
+                host.contains("biliintl.com") ||
+                host.contains("bilibili.com") ||
+                host.contains("pawchive.pw") ||
+                host.contains("instagram.com") ||
+                host.contains("facebook.com") ||
+                host.contains("tiktok.com")
+            if (allowCookie) {
+                val cookies = webViewExtractor.getCookiesForUrl(targetUrl)
+                if (!cookies.isNullOrBlank() && !headers.containsKey("Cookie")) {
+                    out["Cookie"] = cookies
                 }
-
-                val segReq = Request.Builder()
-                    .url(segUrl)
-                    .header("User-Agent", headers["User-Agent"] ?: MediaExtractionEngine.MOBILE_USER_AGENT)
-                    .header("Accept", "*/*")
-                    .apply {
-                        headers.forEach { (k, v) -> header(k, v) }
-                    }
-                    .build()
-
-                httpClient.newCall(segReq).execute().use { segResp ->
-                    if (!segResp.isSuccessful) {
-                        throw ExtractorException(
-                            DownloaderErrorType.NETWORK_FAILURE,
-                            "HLS segment HTTP ${segResp.code}"
-                        )
-                    }
-                    val input = segResp.body?.byteStream() ?: return@use
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read == -1) break
-                        fos.write(buffer, 0, read)
-                        totalDownloaded += read
-                    }
+            }
+            headers.forEach { (k, v) ->
+                if (allowCookie || !k.equals("Cookie", ignoreCase = true)) {
+                    out[k] = v
                 }
+            }
+            return out
+        }
 
-                val now = SystemClock.elapsedRealtime()
-                val elapsedMs = now - lastReportMs
-                if (elapsedMs >= 150L || segIndex == segmentUrls.lastIndex) {
-                    val deltaBytes = totalDownloaded - bytesAtLastReport
-                    val speedBps = if (elapsedMs > 0) (deltaBytes * 1000L) / elapsedMs else 0L
-                    val segFraction = ((segIndex + 1).toFloat() / segmentUrls.size.toFloat()).coerceIn(0f, 1f)
-                    val overallProgress = (progressWeightStart + segFraction * progressWeightSpan).coerceIn(0.02f, 0.98f)
-                    val estTotal = if (segFraction > 0.05f) (totalDownloaded / segFraction).toLong() else -1L
-
+        try {
+            val segmentSpecs = segments.map { s ->
+                IdmAcceleratedDownloader.HlsSegmentSpec(
+                    url = s.url,
+                    keyUri = s.keyUri,
+                    ivHex = s.ivHex,
+                    sequenceNumber = s.sequenceNumber,
+                    byteRangeStart = s.byteRangeStart,
+                    byteRangeLength = s.byteRangeLength
+                )
+            }
+            val workerConcurrency = _maxConnectionsFlow.value.coerceIn(1, 8)
+            idmDownloader.downloadHlsSegmentsParallel(
+                segments = segmentSpecs,
+                tempRawFile = tempRawFile,
+                concurrency = workerConcurrency,
+                requestHeadersProvider = { u -> buildHlsSegmentHeaders(u) },
+                isPausedOrCancelled = {
+                    val curTask = _tasksFlow.value.find { it.id == taskId }
+                    curTask == null || curTask.stage == DownloadStateStage.PAUSED
+                },
+                onProgress = { upd ->
+                    val segFrac = upd.segmentProgress.firstOrNull() ?: 0f
+                    val overallProgress = (progressWeightStart + segFrac * progressWeightSpan).coerceIn(0.02f, 0.98f)
+                    val speedStr = if (upd.activeConnections > 1) {
+                        "${formatBytes(upd.speedBytesPerSec)}/s (${upd.activeConnections}x HLS)"
+                    } else {
+                        "${formatBytes(upd.speedBytesPerSec)}/s"
+                    }
                     updateTask(taskId) {
                         it.copy(
                             progress = overallProgress,
-                            speedBytesPerSec = speedBps,
-                            speedFormatted = "${formatBytes(speedBps)}/s",
-                            downloadedBytes = totalDownloaded,
-                            totalBytes = if (estTotal > 0L) estTotal else totalDownloaded,
-                            isTotalSizeEstimated = segIndex < segmentUrls.lastIndex
+                            speedBytesPerSec = upd.speedBytesPerSec,
+                            speedFormatted = speedStr,
+                            downloadedBytes = upd.downloadedBytes,
+                            totalBytes = if (upd.totalBytes > 0L) upd.totalBytes else upd.downloadedBytes,
+                            isTotalSizeEstimated = segFrac < 0.99f,
+                            activeConnections = upd.activeConnections,
+                            segmentProgress = upd.segmentProgress
                         )
                     }
-                    lastReportMs = now
-                    bytesAtLastReport = totalDownloaded
                 }
+            )
+
+            if (tempRawFile != destFile) {
+                if (MediaProcessingEngine.isMpegTsFile(tempRawFile) &&
+                    MediaProcessingEngine.remuxTsToMp4(tempRawFile, destFile)
+                ) {
+                    return destFile.length()
+                }
+                tempRawFile.copyTo(destFile, overwrite = true)
             }
-            fos.flush()
+        } finally {
+            if (tempRawFile != destFile && tempRawFile.exists()) {
+                try { tempRawFile.delete() } catch (_: Exception) {}
+            }
         }
-        return totalDownloaded
+        return destFile.length()
     }
 
     private fun saveToDragonToolDownloads(
         sourceFile: File,
         filename: String,
         mimeType: String,
-        isAudioOnly: Boolean
+        isAudioOnly: Boolean,
+        isGenericFile: Boolean = false
     ): Pair<File, Uri?> {
-        val subFolder = if (isAudioOnly) "Dragon Tools/Audio" else "Dragon Tools/Video"
-        val publicDownloadDir = File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            subFolder
-        )
+        val subFolder = subFolderForType(isAudioOnly, isGenericFile)
         val appExternalDir = File(
             context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir,
             subFolder
@@ -1089,7 +1495,6 @@ class DragonDownloadManager(
         sourceFile.copyTo(targetLocalFile, overwrite = true)
 
         var publicUri: Uri? = null
-        var publicDirectFile: File? = null
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
@@ -1100,14 +1505,7 @@ class DragonDownloadManager(
                     put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/$subFolder")
                     put(MediaStore.Downloads.IS_PENDING, 1)
                 }
-                var uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                if (uri == null) {
-                    // Retry with unique timestamped display name if MediaStore had a name collision
-                    val base = filename.substringBeforeLast(".")
-                    val ext = filename.substringAfterLast(".", if (isAudioOnly) "m4a" else "mp4")
-                    values.put(MediaStore.Downloads.DISPLAY_NAME, "${base}_${System.currentTimeMillis() % 10000}.$ext")
-                    uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                }
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 if (uri != null) {
                     resolver.openOutputStream(uri)?.use { out ->
                         FileInputStream(targetLocalFile).use { input ->
@@ -1118,38 +1516,22 @@ class DragonDownloadManager(
                     values.put(MediaStore.Downloads.IS_PENDING, 0)
                     resolver.update(uri, values, null, null)
                     publicUri = uri
-
-                    val candidatePub = File(publicDownloadDir, filename)
-                    if (candidatePub.exists() && candidatePub.length() > 0L) {
-                        publicDirectFile = candidatePub
-                        MediaScannerConnection.scanFile(context, arrayOf(candidatePub.absolutePath), arrayOf(mimeType), null)
-                    }
                 }
             } catch (_: Exception) {}
-
-            // If MediaStore was unavailable or legacy external storage is active, also write directly to Download/Dragon Tools/Video (or Audio)
-            if (publicUri == null) {
-                try {
-                    if (!publicDownloadDir.exists()) publicDownloadDir.mkdirs()
-                    val pubFile = File(publicDownloadDir, filename)
-                    targetLocalFile.copyTo(pubFile, overwrite = true)
-                    if (pubFile.exists() && pubFile.length() > 0L) {
-                        publicDirectFile = pubFile
-                        MediaScannerConnection.scanFile(context, arrayOf(pubFile.absolutePath), arrayOf(mimeType), null)
-                    }
-                } catch (_: Exception) {}
-            }
         } else {
             try {
-                if (!publicDownloadDir.exists()) publicDownloadDir.mkdirs()
-                val pubFile = File(publicDownloadDir, filename)
+                val publicDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    subFolder
+                ).apply { mkdirs() }
+                val pubFile = File(publicDir, filename)
                 targetLocalFile.copyTo(pubFile, overwrite = true)
                 MediaScannerConnection.scanFile(context, arrayOf(pubFile.absolutePath), arrayOf(mimeType), null)
                 return pubFile to null
             } catch (_: Exception) {}
         }
 
-        return (publicDirectFile ?: targetLocalFile) to publicUri
+        return targetLocalFile to publicUri
     }
 
     fun pauseDownload(taskId: String) {
@@ -1171,7 +1553,11 @@ class DragonDownloadManager(
         val task = _tasksFlow.value.find { it.id == taskId } ?: return
         if (task.stage != DownloadStateStage.PAUSED && task.stage != DownloadStateStage.FAILED) return
 
-        val resumedStage = if (task.isAudioOnly) DownloadStateStage.DOWNLOADING_AUDIO else DownloadStateStage.DOWNLOADING_VIDEO
+        val resumedStage = when {
+            task.isGenericFile -> DownloadStateStage.DOWNLOADING_FILE
+            task.isAudioOnly -> DownloadStateStage.DOWNLOADING_AUDIO
+            else -> DownloadStateStage.DOWNLOADING_VIDEO
+        }
         val updated = task.copy(
             stage = resumedStage,
             speedFormatted = "Resuming...",
@@ -1208,9 +1594,14 @@ class DragonDownloadManager(
                         if (matchingFmt != null) {
                             val updatedTask = task.copy(
                                 formatOption = matchingFmt,
-                                stage = if (task.isAudioOnly) DownloadStateStage.DOWNLOADING_AUDIO else DownloadStateStage.DOWNLOADING_VIDEO,
+                                stage = when {
+                                    task.isGenericFile -> DownloadStateStage.DOWNLOADING_FILE
+                                    task.isAudioOnly -> DownloadStateStage.DOWNLOADING_AUDIO
+                                    else -> DownloadStateStage.DOWNLOADING_VIDEO
+                                },
                                 progress = 0f,
                                 downloadedBytes = 0L,
+                                segmentProgress = emptyList(),
                                 errorType = null,
                                 errorMessage = null
                             )
@@ -1235,11 +1626,16 @@ class DragonDownloadManager(
         try { workDir.deleteRecursively() } catch (_: Exception) {}
 
         val resetTask = task.copy(
-            stage = if (task.isAudioOnly) DownloadStateStage.DOWNLOADING_AUDIO else DownloadStateStage.DOWNLOADING_VIDEO,
+            stage = when {
+                task.isGenericFile -> DownloadStateStage.DOWNLOADING_FILE
+                task.isAudioOnly -> DownloadStateStage.DOWNLOADING_AUDIO
+                else -> DownloadStateStage.DOWNLOADING_VIDEO
+            },
             progress = 0f,
             downloadedBytes = 0L,
             speedBytesPerSec = 0L,
             speedFormatted = "Retrying...",
+            segmentProgress = emptyList(),
             errorType = null,
             errorMessage = null
         )
@@ -1265,23 +1661,32 @@ class DragonDownloadManager(
         persistTasks()
     }
 
-    fun openDownloadedFile(context: Context, task: DownloaderTask) {
+    private fun resolveTaskContentUri(context: Context, task: DownloaderTask): Uri? {
         val path = task.filePath
-        if (path.isNullOrBlank()) {
-            onFeedback("File path is unavailable.")
-            return
+        if (!path.isNullOrBlank()) {
+            val file = File(path)
+            if (file.exists() && file.length() > 0L) {
+                try {
+                    return FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        file
+                    )
+                } catch (_: Exception) {}
+            }
         }
-        val file = File(path)
-        if (!file.exists() || file.length() <= 0L) {
+        return task.publicUriString?.takeIf { it.isNotBlank() }?.let {
+            try { Uri.parse(it) } catch (_: Exception) { null }
+        }
+    }
+
+    fun openDownloadedFile(context: Context, task: DownloaderTask) {
+        val uri = resolveTaskContentUri(context, task)
+        if (uri == null) {
             onFeedback("File no longer exists on disk.")
             return
         }
         try {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                file
-            )
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, task.mimeType)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -1289,27 +1694,17 @@ class DragonDownloadManager(
             }
             context.startActivity(intent)
         } catch (e: Exception) {
-            onFeedback("No installed media player found for ${task.mimeType}: ${e.message}")
+            onFeedback("No installed viewer found for ${task.mimeType}: ${e.message}")
         }
     }
 
     fun shareDownloadedFile(context: Context, task: DownloaderTask) {
-        val path = task.filePath
-        if (path.isNullOrBlank()) {
-            onFeedback("File path is unavailable.")
-            return
-        }
-        val file = File(path)
-        if (!file.exists() || file.length() <= 0L) {
+        val uri = resolveTaskContentUri(context, task)
+        if (uri == null) {
             onFeedback("File no longer exists on disk.")
             return
         }
         try {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                file
-            )
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = task.mimeType
                 putExtra(Intent.EXTRA_STREAM, uri)
@@ -1325,13 +1720,76 @@ class DragonDownloadManager(
         }
     }
 
-    private fun buildUniqueFilename(title: String, qualityLabel: String, ext: String, isAudioOnly: Boolean = false): String {
+    fun buildSuggestedFilename(
+        title: String,
+        qualityLabel: String,
+        ext: String,
+        isAudioOnly: Boolean = false,
+        isGenericFile: Boolean = false
+    ): String {
+        return buildUniqueFilename(
+            title = title,
+            qualityLabel = qualityLabel,
+            ext = ext,
+            isAudioOnly = isAudioOnly,
+            isGenericFile = isGenericFile,
+            customFilename = null
+        )
+    }
+
+    private fun buildUniqueFilename(
+        title: String,
+        qualityLabel: String,
+        ext: String,
+        isAudioOnly: Boolean = false,
+        isGenericFile: Boolean = false,
+        customFilename: String? = null
+    ): String {
+        val subFolder = subFolderForType(isAudioOnly, isGenericFile)
+        val appDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, subFolder).apply { mkdirs() }
+
+        val sanitizedCustom = customFilename
+            ?.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), " ")
+            ?.replace(Regex("\\s+"), " ")
+            ?.trim()
+            ?.take(100)
+            ?.takeIf { it.isNotBlank() }
+
+        if (sanitizedCustom != null) {
+            val hasExt = sanitizedCustom.contains('.') && sanitizedCustom.substringAfterLast('.').length in 1..6
+            val cleanBase = if (hasExt) sanitizedCustom.substringBeforeLast('.') else sanitizedCustom
+            val finalExt = if (hasExt) sanitizedCustom.substringAfterLast('.').lowercase(Locale.US) else ext
+            var candidate = "$cleanBase.$finalExt"
+            var counter = 1
+            while (File(appDir, candidate).exists() || _tasksFlow.value.any { it.filename.equals(candidate, ignoreCase = true) }) {
+                candidate = "${cleanBase}_($counter).$finalExt"
+                counter++
+            }
+            return candidate
+        }
+
         val sanitizedTitle = title
             .replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), " ")
             .replace(Regex("\\s+"), " ")
-            .trim()
-            .take(68)
-            .ifBlank { "DragonMedia_${System.currentTimeMillis() % 10000}" }
+            ?.trim()
+            .orEmpty()
+            .take(80)
+            .ifBlank { "DragonFile_${System.currentTimeMillis() % 10000}" }
+
+        if (isGenericFile) {
+            val cleanBase = if (sanitizedTitle.endsWith(".$ext", ignoreCase = true)) {
+                sanitizedTitle.dropLast(ext.length + 1)
+            } else {
+                sanitizedTitle
+            }
+            var candidate = "$cleanBase.$ext"
+            var counter = 1
+            while (File(appDir, candidate).exists() || _tasksFlow.value.any { it.filename.equals(candidate, ignoreCase = true) }) {
+                candidate = "${cleanBase}_($counter).$ext"
+                counter++
+            }
+            return candidate
+        }
 
         val shortQuality = when {
             qualityLabel.contains("2160p") && qualityLabel.contains("60fps") -> "2160p_4K_60fps"
@@ -1357,12 +1815,9 @@ class DragonDownloadManager(
             else -> ext.uppercase(Locale.US)
         }
 
-        val subFolder = if (isAudioOnly) "Dragon Tools/Audio" else "Dragon Tools/Video"
-        val appDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, subFolder).apply { mkdirs() }
-        val pubDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), subFolder)
         var candidate = "${sanitizedTitle}_$shortQuality.$ext"
         var counter = 1
-        while (File(appDir, candidate).exists() || File(pubDir, candidate).exists() || _tasksFlow.value.any { it.filename.equals(candidate, ignoreCase = true) }) {
+        while (File(appDir, candidate).exists() || _tasksFlow.value.any { it.filename.equals(candidate, ignoreCase = true) }) {
             candidate = "${sanitizedTitle}_${shortQuality}_($counter).$ext"
             counter++
         }
@@ -1401,6 +1856,7 @@ class DragonDownloadManager(
                     put("container", t.container)
                     put("mimeType", t.mimeType)
                     put("isAudioOnly", t.isAudioOnly)
+                    put("isGenericFile", t.isGenericFile)
                     put("stage", if (t.stage.isActive) DownloadStateStage.PAUSED.name else t.stage.name)
                     put("progress", t.progress.toDouble())
                     put("downloadedBytes", t.downloadedBytes)
@@ -1437,8 +1893,9 @@ class DragonDownloadManager(
                 val platformStr = obj.optString("platform", MediaPlatform.DIRECT.name)
                 val platform = MediaPlatform.values().firstOrNull { it.name == platformStr } ?: MediaPlatform.DIRECT
                 val isAudio = obj.optBoolean("isAudioOnly", false)
-                val container = obj.optString("container", if (isAudio) "m4a" else "mp4")
-                val mime = obj.optString("mimeType", if (isAudio) "audio/mp4" else "video/mp4")
+                val isGeneric = obj.optBoolean("isGenericFile", false)
+                val container = obj.optString("container", if (isAudio) "m4a" else if (isGeneric) "bin" else "mp4")
+                val mime = obj.optString("mimeType", if (isAudio) "audio/mp4" else if (isGeneric) "application/octet-stream" else "video/mp4")
                 val qLabel = obj.optString("qualityLabel", "Original")
                 val streamUrl = obj.optString("streamUrl", obj.optString("url", ""))
                 val totalB = obj.optLong("totalBytes", -1L)
@@ -1450,7 +1907,8 @@ class DragonDownloadManager(
                     mimeType = mime,
                     contentLengthBytes = totalB,
                     isAudioOnly = isAudio,
-                    streamUrl = streamUrl
+                    streamUrl = streamUrl,
+                    isGenericFile = isGeneric
                 )
                 loaded.add(
                     DownloaderTask(
@@ -1478,7 +1936,8 @@ class DragonDownloadManager(
                         verifiedCodec = obj.optString("verifiedCodec", "").ifBlank { null },
                         errorMessage = obj.optString("errorMessage", "").ifBlank { null },
                         createdAtMs = obj.optLong("createdAtMs", System.currentTimeMillis()),
-                        batchSessionId = obj.optString("batchSessionId", "").ifBlank { null }
+                        batchSessionId = obj.optString("batchSessionId", "").ifBlank { null },
+                        isGenericFile = isGeneric
                     )
                 )
             }
@@ -1660,7 +2119,7 @@ class DragonDownloadManager(
                 )
             }
         } else {
-            val videoList = info.videoFormats.ifEmpty { info.allFormats.filter { !it.isAudioOnly } }
+            val videoList = info.videoFormats
             if (videoList.isNotEmpty()) {
                 val exactOrLower = videoList.filter { it.resolutionHeight <= config.preferredResolutionHeight }
                 if (exactOrLower.isNotEmpty()) {
@@ -1668,6 +2127,8 @@ class DragonDownloadManager(
                 } else {
                     videoList.minByOrNull { it.resolutionHeight } ?: videoList.first()
                 }
+            } else if (info.fileFormats.isNotEmpty()) {
+                info.fileFormats.first()
             } else {
                 info.allFormats.firstOrNull()
             }

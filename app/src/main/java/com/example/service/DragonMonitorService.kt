@@ -1,5 +1,6 @@
 package com.example.service
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -10,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import com.example.DragonKernelApp
@@ -21,6 +23,8 @@ import com.example.data.repository.KernelRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -29,16 +33,46 @@ import kotlin.math.abs
 
 class DragonMonitorService : Service() {
 
-    private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
+    private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var monitorJob: Job? = null
     private var lastLogTime = 0L
-    private var lastBatteryBroadcastTickMs = 0L
     private var lastNotificationUpdateMs = 0L
     private var chargingWakeLock: PowerManager.WakeLock? = null
 
+    @Volatile private var lastNotifiedBatLevel: Int = -1
+    @Volatile private var lastNotifiedCharging: Boolean? = null
+    @Volatile private var lastNotifiedPlugged: Boolean? = null
+    @Volatile private var lastNotifiedBypass: Boolean? = null
+    @Volatile private var lastNotifiedBypassVerified: Boolean? = null
+
+    private fun setExplicitlyStopped(stopped: Boolean) {
+        try {
+            getSharedPreferences(PREFS_SERVICE_STATE, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_EXPLICITLY_STOPPED, stopped)
+                .apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun isExplicitlyStopped(): Boolean {
+        return try {
+            getSharedPreferences(PREFS_SERVICE_STATE, Context.MODE_PRIVATE)
+                .getBoolean(KEY_EXPLICITLY_STOPPED, false)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun updateNotificationImmediately() {
         try {
-            lastNotificationUpdateMs = android.os.SystemClock.elapsedRealtime()
+            val repository = KernelRepository.getInstance(applicationContext)
+            val bat = repository.batteryFlow.value
+            lastNotifiedBatLevel = bat.levelPercent
+            lastNotifiedCharging = bat.isCharging
+            lastNotifiedPlugged = bat.isPluggedIn
+            lastNotifiedBypass = bat.isBypassCharging
+            lastNotifiedBypassVerified = bat.isBypassHardwareVerified
+            lastNotificationUpdateMs = SystemClock.elapsedRealtime()
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.notify(NOTIFICATION_ID, buildTelemetryNotification())
         } catch (_: Exception) {}
@@ -65,15 +99,7 @@ class DragonMonitorService : Service() {
                     updateNotificationImmediately()
                 }
                 Intent.ACTION_BATTERY_CHANGED -> {
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    val minInterval = if (repository.isMainActivityForeground()) 4_000L else 20_000L
-                    if (now - lastBatteryBroadcastTickMs >= minInterval) {
-                        lastBatteryBroadcastTickMs = now
-                        repository.tickTelemetry()
-                        if (repository.isMainActivityForeground() || now - lastNotificationUpdateMs >= 20_000L) {
-                            updateNotificationImmediately()
-                        }
-                    }
+                    repository.onBatteryChangedIntentReceived(intent)
                 }
             }
         }
@@ -118,23 +144,51 @@ class DragonMonitorService : Service() {
                 updateNotificationImmediately()
             }
         }
+        serviceScope.launch {
+            val repository = KernelRepository.getInstance(applicationContext)
+            repository.isRecordingFpsFlow.collect {
+                updateNotificationImmediately()
+            }
+        }
+        serviceScope.launch {
+            val repository = KernelRepository.getInstance(applicationContext)
+            repository.batteryFlow.collect { bat ->
+                val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                val isScreenOn = pm?.isInteractive ?: true
+                val significantChange = lastNotifiedBatLevel != bat.levelPercent ||
+                    lastNotifiedCharging != bat.isCharging ||
+                    lastNotifiedPlugged != bat.isPluggedIn ||
+                    lastNotifiedBypass != bat.isBypassCharging ||
+                    lastNotifiedBypassVerified != bat.isBypassHardwareVerified
+                val elapsedNotifyMs = SystemClock.elapsedRealtime() - lastNotificationUpdateMs
+                if (significantChange || ((isScreenOn || bat.isCharging || bat.isPluggedIn) && elapsedNotifyMs >= 1_500L)) {
+                    updateNotificationImmediately()
+                }
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_SERVICE) {
+            setExplicitlyStopped(true)
+            try {
+                KernelRepository.getInstance(applicationContext).persistBatteryCheckpoint()
+            } catch (_: Exception) {}
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
 
+        setExplicitlyStopped(false)
         val repository = KernelRepository.getInstance(applicationContext)
         when (intent?.action) {
             ACTION_TOGGLE_FPS_REC -> {
                 repository.toggleFpsRecording()
             }
             ACTION_REFRESH_NOTIFICATION -> {
+                repository.tickTelemetry(force = true)
                 updateNotificationImmediately()
             }
         }
@@ -152,6 +206,7 @@ class DragonMonitorService : Service() {
             startForeground(NOTIFICATION_ID, buildTelemetryNotification())
         }
 
+        repository.tickTelemetry(force = true)
         updateNotificationImmediately()
         startTelemetryLoop()
 
@@ -162,10 +217,9 @@ class DragonMonitorService : Service() {
         monitorJob?.cancel()
         monitorJob = serviceScope.launch {
             val repository = KernelRepository.getInstance(applicationContext)
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
             while (isActive) {
-                repository.tickTelemetry()
+                repository.tickTelemetryAndWait(force = false)
 
                 val battery = repository.batteryFlow.value
                 val thermal = repository.thermalConfigFlow.value
@@ -183,9 +237,9 @@ class DragonMonitorService : Service() {
                 val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
                 val isScreenOn = pm?.isInteractive ?: true
                 val isAppFg = repository.isMainActivityForeground()
-                val elapsedNotifyMs = android.os.SystemClock.elapsedRealtime() - lastNotificationUpdateMs
+                val elapsedNotifyMs = SystemClock.elapsedRealtime() - lastNotificationUpdateMs
 
-                if ((isScreenOn || battery.isCharging) && (isAppFg || elapsedNotifyMs >= 20_000L)) {
+                if ((isScreenOn || battery.isCharging || battery.isPluggedIn) && elapsedNotifyMs >= 1_500L) {
                     updateNotificationImmediately()
                 }
 
@@ -216,9 +270,9 @@ class DragonMonitorService : Service() {
                 }
 
                 val intervalMs = when {
-                    isAppFg -> 1500L
-                    isScreenOn || battery.isCharging -> 20_000L
-                    else -> 30_000L
+                    isAppFg -> 1_500L
+                    isScreenOn || battery.isCharging || battery.isPluggedIn || repository.fpsOverlayConfigFlow.value.isEnabled -> 2_000L
+                    else -> 15_000L
                 }
                 delay(intervalMs)
             }
@@ -525,7 +579,7 @@ class DragonMonitorService : Service() {
 
                 val collapsedView = RemoteViews(packageName, R.layout.notification_gaming_collapsed)
                 collapsedView.setInt(R.id.notif_collapsed_root, "setBackgroundResource", R.drawable.bg_gaming_notif_card)
-                collapsedView.setTextViewText(R.id.tv_collapsed_header, "⚡ ${presetName.uppercase()} HUD")
+                collapsedView.setTextViewText(R.id.tv_collapsed_header, "⚡ TURBO DECK")
                 collapsedView.setTextColor(R.id.tv_collapsed_header, accentColorInt)
                 collapsedView.setInt(R.id.tv_collapsed_profile_badge, "setBackgroundResource", R.drawable.bg_gaming_notif_badge)
                 collapsedView.setTextViewText(R.id.tv_collapsed_profile_badge, "$activeProfileShort • 120 FPS")
@@ -541,14 +595,14 @@ class DragonMonitorService : Service() {
                 collapsedView.setInt(R.id.btn_collapsed_rec_fps, "setBackgroundResource", R.drawable.bg_gaming_notif_btn)
                 collapsedView.setTextViewText(
                     R.id.btn_collapsed_rec_fps,
-                    if (isRecording) "⏹ STOP" else "⏺ REC FPS"
+                    if (isRecording) "⏹ STOP" else "⏺ REC"
                 )
                 collapsedView.setTextColor(R.id.btn_collapsed_rec_fps, accentColorInt)
                 collapsedView.setOnClickPendingIntent(R.id.btn_collapsed_rec_fps, fpsRecPendingIntent)
 
                 val expandedView = RemoteViews(packageName, R.layout.notification_gaming_expanded)
                 expandedView.setInt(R.id.notif_expanded_root, "setBackgroundResource", R.drawable.bg_gaming_notif_card)
-                expandedView.setTextViewText(R.id.tv_hud_brand, "⚡ DRAGON TOOLS // ${presetName.uppercase()}")
+                expandedView.setTextViewText(R.id.tv_hud_brand, "⚡ DRAGON TURBO DECK // ${presetName.uppercase()}")
                 expandedView.setTextColor(R.id.tv_hud_brand, accentColorInt)
                 expandedView.setInt(R.id.tv_hud_active_profile, "setBackgroundResource", R.drawable.bg_gaming_notif_badge)
                 expandedView.setTextViewText(R.id.tv_hud_active_profile, "$activeProfileShort • 120 FPS")
@@ -597,7 +651,7 @@ class DragonMonitorService : Service() {
                 val glassAccent = android.graphics.Color.parseColor("#38BDF8")
                 val collapsedView = RemoteViews(packageName, R.layout.notification_gaming_collapsed)
                 collapsedView.setInt(R.id.notif_collapsed_root, "setBackgroundResource", R.drawable.bg_liquid_glass_notif_card)
-                collapsedView.setTextViewText(R.id.tv_collapsed_header, "❄️ LIQUID GLASS COMPACT")
+                collapsedView.setTextViewText(R.id.tv_collapsed_header, "❄️ TURBO DECK")
                 collapsedView.setTextColor(R.id.tv_collapsed_header, android.graphics.Color.WHITE)
                 collapsedView.setInt(R.id.tv_collapsed_profile_badge, "setBackgroundResource", R.drawable.bg_liquid_glass_notif_badge)
                 collapsedView.setTextViewText(R.id.tv_collapsed_profile_badge, "$activeProfileShort • 120 FPS")
@@ -620,7 +674,7 @@ class DragonMonitorService : Service() {
 
                 val expandedView = RemoteViews(packageName, R.layout.notification_gaming_expanded)
                 expandedView.setInt(R.id.notif_expanded_root, "setBackgroundResource", R.drawable.bg_liquid_glass_notif_card)
-                expandedView.setTextViewText(R.id.tv_hud_brand, "❄️ LIQUID GLASS // COMPACT HUD")
+                expandedView.setTextViewText(R.id.tv_hud_brand, "❄️ DRAGON TURBO DECK // GLASS")
                 expandedView.setTextColor(R.id.tv_hud_brand, android.graphics.Color.WHITE)
                 expandedView.setInt(R.id.tv_hud_active_profile, "setBackgroundResource", R.drawable.bg_liquid_glass_notif_badge)
                 expandedView.setTextViewText(R.id.tv_hud_active_profile, "$activeProfileShort • 120 FPS")
@@ -699,41 +753,86 @@ class DragonMonitorService : Service() {
         notificationManager.notify(THERMAL_WARNING_NOTIFICATION_ID, warningNotification)
     }
 
+    private fun scheduleServiceRestart() {
+        try {
+            val restartIntent = Intent(applicationContext, com.example.receiver.DragonBootReceiver::class.java).apply {
+                action = ACTION_RESTART_MONITOR
+            }
+            val pendingIntent = PendingIntent.getBroadcast(
+                applicationContext,
+                RESTART_REQUEST_CODE,
+                restartIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+            alarmManager.set(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SystemClock.elapsedRealtime() + 1_000L,
+                pendingIntent
+            )
+        } catch (_: Exception) {}
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        try {
+            KernelRepository.getInstance(applicationContext).persistBatteryCheckpoint()
+        } catch (_: Exception) {}
+        if (!isExplicitlyStopped()) {
+            scheduleServiceRestart()
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         monitorJob?.cancel()
+        serviceScope.cancel()
         if (chargingWakeLock?.isHeld == true) {
             try { chargingWakeLock?.release() } catch (_: Exception) {}
         }
         try {
             unregisterReceiver(batteryScreenReceiver)
         } catch (_: Exception) {}
+        try {
+            KernelRepository.getInstance(applicationContext).persistBatteryCheckpoint()
+        } catch (_: Exception) {}
+        if (!isExplicitlyStopped()) {
+            scheduleServiceRestart()
+        }
     }
 
     companion object {
         const val NOTIFICATION_ID = 9001
         const val THERMAL_WARNING_NOTIFICATION_ID = 9002
+        const val RESTART_REQUEST_CODE = 9099
+        private const val PREFS_SERVICE_STATE = "dragon_monitor_service_state"
+        private const val KEY_EXPLICITLY_STOPPED = "explicitly_stopped"
         const val ACTION_START_SERVICE = "com.example.dragonkernel.START_MONITOR"
         const val ACTION_STOP_SERVICE = "com.example.dragonkernel.STOP_MONITOR"
         const val ACTION_TOGGLE_FPS_REC = "com.example.dragonkernel.TOGGLE_FPS_REC"
         const val ACTION_REFRESH_NOTIFICATION = "com.example.dragonkernel.REFRESH_NOTIFICATION"
+        const val ACTION_RESTART_MONITOR = "com.example.dragonkernel.RESTART_MONITOR"
 
         fun startService(context: Context) {
             val intent = Intent(context, DragonMonitorService::class.java).apply {
                 action = ACTION_START_SERVICE
             }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (_: Exception) {}
         }
 
         fun stopService(context: Context) {
             val intent = Intent(context, DragonMonitorService::class.java).apply {
                 action = ACTION_STOP_SERVICE
             }
-            context.startService(intent)
+            try {
+                context.startService(intent)
+            } catch (_: Exception) {}
         }
     }
 }

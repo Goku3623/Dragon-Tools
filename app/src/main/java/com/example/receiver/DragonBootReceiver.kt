@@ -14,7 +14,8 @@ class DragonBootReceiver : BroadcastReceiver() {
         val action = intent.action ?: return
         if (action == Intent.ACTION_BOOT_COMPLETED ||
             action == Intent.ACTION_MY_PACKAGE_REPLACED ||
-            action == Intent.ACTION_POWER_CONNECTED
+            action == Intent.ACTION_POWER_CONNECTED ||
+            action == DragonMonitorService.ACTION_RESTART_MONITOR
         ) {
             try {
                 DragonMonitorService.startService(context.applicationContext)
@@ -26,7 +27,7 @@ class DragonBootReceiver : BroadcastReceiver() {
                     if (action == Intent.ACTION_BOOT_COMPLETED && repo.freshStartConfigFlow.value.autoFreshStartOnBoot) {
                         repo.startFreshTelemetrySession(reason = "Device Boot")
                     } else {
-                        repo.tickTelemetry()
+                        repo.tickTelemetry(force = true)
                     }
                     if (repo.chargingControlsFlow.value.bypassThermalLimit) {
                         repo.forceRootBypassThermalLimit()

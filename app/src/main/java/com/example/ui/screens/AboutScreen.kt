@@ -92,7 +92,7 @@ fun AboutScreen(repository: KernelRepository) {
                         modifier = Modifier.padding(horizontal = 8.dp)
                     ) {
                         Text(
-                            text = "Version 2.1 (Dragon Release)",
+                            text = "Version 3.0 (Dragon Release)",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary

@@ -19,15 +19,49 @@ enum class MediaPlatform(
     REDDIT("Reddit", 0xFFFF4500, "RDT"),
     PINTEREST("Pinterest", 0xFFE60023, "PIN"),
     VIMEO("Vimeo", 0xFF1AB7EA, "VMO"),
-    DIRECT("Direct Media", 0xFF10B981, "DIRECT"),
-    OTHER("Supported Web Media", 0xFF6366F1, "WEB"),
+    PATREON("Patreon", 0xFFFF424D, "PTRN"),
+    BILIBILI("Bilibili.tv", 0xFF00A1D6, "BILI"),
+    PAWCHIVE("Pawchive", 0xFFFB7185, "PAW"),
+    DIRECT("Direct File / Media", 0xFF10B981, "FILE"),
+    OTHER("Any Website", 0xFF6366F1, "WEB"),
     UNSUPPORTED("Unsupported", 0xFF9CA3AF, "N/A");
 
     companion object {
-        private val DIRECT_EXTENSIONS = setOf(
-            ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".3gp",
-            ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus"
+        val VIDEO_EXTENSIONS = setOf(
+            ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".3gp", ".avi", ".flv", ".ts"
         )
+        val AUDIO_EXTENSIONS = setOf(
+            ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus", ".wma"
+        )
+        val ARCHIVE_EXTENSIONS = setOf(
+            ".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".zst"
+        )
+        val INSTALLER_EXTENSIONS = setOf(
+            ".apk", ".apks", ".xapk", ".obb", ".exe", ".msi", ".dmg", ".pkg", ".deb", ".rpm", ".appimage"
+        )
+        val DISK_IMAGE_AND_BIN_EXTENSIONS = setOf(
+            ".iso", ".img", ".bin", ".wasm", ".jar", ".torrent"
+        )
+        val DOCUMENT_EXTENSIONS = setOf(
+            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+            ".txt", ".csv", ".rtf", ".epub", ".mobi", ".json", ".xml"
+        )
+        val IMAGE_AND_FONT_EXTENSIONS = setOf(
+            ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp", ".ico",
+            ".ttf", ".otf", ".woff2"
+        )
+        val DIRECT_EXTENSIONS: Set<String> = VIDEO_EXTENSIONS +
+            AUDIO_EXTENSIONS +
+            ARCHIVE_EXTENSIONS +
+            INSTALLER_EXTENSIONS +
+            DISK_IMAGE_AND_BIN_EXTENSIONS +
+            DOCUMENT_EXTENSIONS +
+            IMAGE_AND_FONT_EXTENSIONS
+
+        fun hasDirectFileExtension(url: String): Boolean {
+            val path = url.substringBefore("?").substringBefore("#").lowercase(Locale.US)
+            return DIRECT_EXTENSIONS.any { path.endsWith(it) }
+        }
 
         fun detectFromUrl(rawUrl: String): MediaPlatform {
             val trimmed = rawUrl.trim()
@@ -57,6 +91,9 @@ enum class MediaPlatform(
                     lower.contains("reddit.com") || lower.contains("redd.it") -> REDDIT
                     lower.contains("pinterest.") || lower.contains("pin.it") -> PINTEREST
                     lower.contains("vimeo.com") -> VIMEO
+                    lower.contains("patreon.com") || lower.contains("patreonusercontent.com") -> PATREON
+                    lower.contains("bilibili.tv") || lower.contains("biliintl.com") || lower.contains("bilibili.com") || lower.contains("b23.tv") -> BILIBILI
+                    lower.contains("pawchive.pw") -> PAWCHIVE
                     DIRECT_EXTENSIONS.any { lower.substringBefore("?").endsWith(it) } -> DIRECT
                     else -> UNSUPPORTED
                 }
@@ -75,6 +112,9 @@ enum class MediaPlatform(
                 host == "reddit.com" || host.endsWith(".reddit.com") || host == "redd.it" || host == "v.redd.it" -> REDDIT
                 host.contains("pinterest.") || host == "pin.it" -> PINTEREST
                 host == "vimeo.com" || host.endsWith(".vimeo.com") -> VIMEO
+                host == "patreon.com" || host.endsWith(".patreon.com") || host == "patreonusercontent.com" || host.endsWith(".patreonusercontent.com") -> PATREON
+                host == "bilibili.tv" || host.endsWith(".bilibili.tv") || host == "biliintl.com" || host.endsWith(".biliintl.com") || host == "bilibili.com" || host.endsWith(".bilibili.com") || host == "b23.tv" -> BILIBILI
+                host == "pawchive.pw" || host.endsWith(".pawchive.pw") -> PAWCHIVE
                 DIRECT_EXTENSIONS.any { path.endsWith(it) } -> DIRECT
                 host.contains(".") -> OTHER
                 else -> UNSUPPORTED
@@ -89,6 +129,7 @@ enum class DownloadStateStage(val displayLabel: String, val isTerminal: Boolean,
     SELECTING_FORMAT("Selecting Format", false, true),
     DOWNLOADING_VIDEO("Downloading Video", false, true),
     DOWNLOADING_AUDIO("Downloading Audio", false, true),
+    DOWNLOADING_FILE("Downloading File", false, true),
     MERGING_STREAMS("Merging Audio & Video", false, true),
     CONVERTING_MEDIA("Converting Media", false, true),
     VALIDATING_OUTPUT("Validating Output", false, true),
@@ -141,7 +182,9 @@ data class MediaFormatOption(
     val audioBitDepth: Int = 16,
     val encodingProfile: String = "",
     val colorProfile: String = "SDR (Rec.709)",
-    val fallbackStreamUrls: List<String> = emptyList()
+    val fallbackStreamUrls: List<String> = emptyList(),
+    val isGenericFile: Boolean = false,
+    val fileCategoryLabel: String = ""
 ) {
     val totalEstimatedOrExactBytes: Long
         get() = when {
@@ -152,13 +195,14 @@ data class MediaFormatOption(
 
     fun formattedSize(durationSeconds: Long = 0L): String {
         val bytes = calculateBytes(durationSeconds)
-        if (bytes <= 0L) return "Size on stream"
+        if (bytes <= 0L) return if (isGenericFile) "Size from server" else "Size on stream"
         val prefix = if (isEstimatedSize || totalEstimatedOrExactBytes <= 0L) "~" else ""
         return prefix + formatBytes(bytes)
     }
 
     fun calculateBytes(durationSeconds: Long = 0L): Long {
         if (totalEstimatedOrExactBytes > 0L) return totalEstimatedOrExactBytes
+        if (isGenericFile) return -1L
         val effectiveDuration = if (durationSeconds > 0L) durationSeconds else 30L
         if (bitrateKbps > 0) {
             return (bitrateKbps * 1000L * effectiveDuration) / 8L
@@ -167,6 +211,13 @@ data class MediaFormatOption(
     }
 
     fun technicalSummary(): String {
+        if (isGenericFile) {
+            return buildString {
+                append(container.uppercase(Locale.US))
+                if (fileCategoryLabel.isNotBlank()) append(" • $fileCategoryLabel")
+                if (mimeType.isNotBlank()) append(" • $mimeType")
+            }
+        }
         return if (isAudioOnly) {
             buildString {
                 append(container.uppercase(Locale.US))
@@ -207,10 +258,11 @@ data class MediaInfo(
     val videoFormats: List<MediaFormatOption>,
     val audioFormats: List<MediaFormatOption>,
     val extractorSource: String = "Native Extraction Pipeline",
-    val extractedAtMs: Long = System.currentTimeMillis()
+    val extractedAtMs: Long = System.currentTimeMillis(),
+    val fileFormats: List<MediaFormatOption> = emptyList()
 ) {
     val allFormats: List<MediaFormatOption>
-        get() = videoFormats + audioFormats
+        get() = videoFormats + audioFormats + fileFormats
 }
 
 data class DownloaderTask(
@@ -245,7 +297,10 @@ data class DownloaderTask(
     val errorType: DownloaderErrorType? = null,
     val errorMessage: String? = null,
     val batchSessionId: String? = null,
-    val createdAtMs: Long = System.currentTimeMillis()
+    val createdAtMs: Long = System.currentTimeMillis(),
+    val isGenericFile: Boolean = false,
+    val activeConnections: Int = 1,
+    val segmentProgress: List<Float> = emptyList()
 ) {
     val downloadedSizeFormatted: String
         get() = formatBytes(downloadedBytes)

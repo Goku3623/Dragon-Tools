@@ -28,6 +28,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.Calendar
 import java.util.Locale
@@ -259,6 +261,9 @@ class KernelRepository private constructor(private val context: Context) {
             val lgRefraction = prefs.getFloat("liquid_glass_refraction", 0.85f)
             val lgTint = prefs.getString("liquid_glass_tint", "Frosted Ice") ?: "Frosted Ice"
             val presetName = prefs.getString("active_preset_name", "Material 3 You") ?: "Material 3 You"
+            val hapticEnabled = prefs.getBoolean("haptic_feedback_enabled", true)
+            val hapticIntensityName = prefs.getString("haptic_intensity", HapticIntensity.BALANCED.name)
+            val hapticIntensity = HapticIntensity.entries.find { it.name == hapticIntensityName } ?: HapticIntensity.BALANCED
 
             ThemeCustomizationConfig(
                 primaryAccentIndex = primaryAccent,
@@ -277,7 +282,9 @@ class KernelRepository private constructor(private val context: Context) {
                 liquidGlassOpacity = lgOpacity,
                 liquidGlassRefraction = lgRefraction,
                 liquidGlassWallpaperTint = lgTint,
-                activePresetName = presetName
+                activePresetName = presetName,
+                hapticFeedbackEnabled = hapticEnabled,
+                hapticIntensity = hapticIntensity
             )
         } catch (_: Exception) {
             ThemeCustomizationConfig()
@@ -306,6 +313,8 @@ class KernelRepository private constructor(private val context: Context) {
                 .putFloat("liquid_glass_refraction", config.liquidGlassRefraction)
                 .putString("liquid_glass_tint", config.liquidGlassWallpaperTint)
                 .putString("active_preset_name", config.activePresetName)
+                .putBoolean("haptic_feedback_enabled", config.hapticFeedbackEnabled)
+                .putString("haptic_intensity", config.hapticIntensity.name)
                 .apply()
         } catch (_: Exception) {}
     }
@@ -495,7 +504,7 @@ class KernelRepository private constructor(private val context: Context) {
         }
     }
 
-    private fun defaultCustomProfilesList(): List<CustomBatteryProfile> = emptyList()
+    private fun defaultCustomProfilesList(): List<CustomBatteryProfile> = listOf(inbuiltPugbMobileProfile())
 
     private fun saveCustomProfilesPrefs(profiles: List<CustomBatteryProfile>) {
         try {
@@ -545,8 +554,13 @@ class KernelRepository private constructor(private val context: Context) {
         return try {
             val prefs = context.getSharedPreferences("dragon_custom_profiles_prefs", Context.MODE_PRIVATE)
             if (!prefs.getBoolean("has_saved_custom_profiles", false)) {
-                prefs.edit().putBoolean("removed_inbuilt_custom_v1", true).apply()
-                return emptyList()
+                val defaults = defaultCustomProfilesList()
+                saveCustomProfilesPrefs(defaults)
+                prefs.edit()
+                    .putBoolean("removed_inbuilt_custom_v1", true)
+                    .putBoolean("seeded_inbuilt_pugb_mobile_v1", true)
+                    .apply()
+                return defaults
             }
             val raw = prefs.getString("profiles_json", "[]") ?: "[]"
             val arr = org.json.JSONArray(raw)
@@ -587,21 +601,36 @@ class KernelRepository private constructor(private val context: Context) {
                     )
                 )
             }
+            var working = list.toList()
+            var changed = false
             if (!prefs.getBoolean("removed_inbuilt_custom_v1", false)) {
-                val filtered = list.filterNot { it.id == "custom_daily_ultra" }
+                val filtered = working.filterNot { it.id == "custom_daily_ultra" }
                 prefs.edit().putBoolean("removed_inbuilt_custom_v1", true).apply()
-                if (filtered.size != list.size) {
-                    saveCustomProfilesPrefs(filtered)
+                if (filtered.size != working.size) {
+                    working = filtered
+                    changed = true
                 }
                 val profPrefs = context.getSharedPreferences("dragon_battery_profile_prefs", Context.MODE_PRIVATE)
                 if (profPrefs.getString("active_custom_profile_id", "") == "custom_daily_ultra") {
                     profPrefs.edit().putString("active_custom_profile_id", "").apply()
                 }
-                return filtered
             }
-            list
+            if (!prefs.getBoolean("seeded_inbuilt_pugb_mobile_v1", false)) {
+                val alreadyExists = working.any {
+                    it.id == INBUILT_PUGB_MOBILE_PROFILE_ID || it.title.equals("PUGB Mobile", ignoreCase = true)
+                }
+                if (!alreadyExists) {
+                    working = listOf(inbuiltPugbMobileProfile()) + working
+                    changed = true
+                }
+                prefs.edit().putBoolean("seeded_inbuilt_pugb_mobile_v1", true).apply()
+            }
+            if (changed) {
+                saveCustomProfilesPrefs(working)
+            }
+            working
         } catch (_: Exception) {
-            emptyList()
+            defaultCustomProfilesList()
         }
     }
 
@@ -688,9 +717,19 @@ class KernelRepository private constructor(private val context: Context) {
             } else {
                 listOf(
                     AppBatteryProfileRule(
+                        packageName = "com.tencent.ig",
+                        appName = "PUBG Mobile",
+                        profile = BatteryProfile.GAMING,
+                        customProfileId = INBUILT_PUGB_MOBILE_PROFILE_ID,
+                        refreshRateHz = 120,
+                        enableBypassCharging = true,
+                        clearRamOnLaunch = true
+                    ),
+                    AppBatteryProfileRule(
                         packageName = "com.pubg.imobile",
                         appName = "BGMI / PUBG Mobile",
                         profile = BatteryProfile.GAMING,
+                        customProfileId = INBUILT_PUGB_MOBILE_PROFILE_ID,
                         refreshRateHz = 120,
                         enableBypassCharging = true,
                         clearRamOnLaunch = true
@@ -997,6 +1036,12 @@ class KernelRepository private constructor(private val context: Context) {
     @Volatile
     private var sysfsTempC: Float? = null
     @Volatile
+    private var lastSysfsBatteryReadMs: Long = 0L
+    @Volatile
+    private var lastBatteryIntentChargingState: Boolean? = null
+    @Volatile
+    private var lastBatteryChangedIntent: Intent? = null
+    @Volatile
     private var sysfsCycleCount: Int? = null
     @Volatile
     private var sysfsChargeFullMah: Int? = null
@@ -1120,14 +1165,132 @@ class KernelRepository private constructor(private val context: Context) {
     @Volatile
     private var hasManualGpuTweaks: Boolean = false
 
+    @Volatile private var sysfsCpuCurKhz: Map<Int, Int> = emptyMap()
+    @Volatile private var sysfsCpuMinKhz: Map<Int, Int> = emptyMap()
+    @Volatile private var sysfsCpuMaxKhz: Map<Int, Int> = emptyMap()
+    @Volatile private var sysfsCpuGov: Map<Int, String> = emptyMap()
+    @Volatile private var sysfsGpuCurMhz: Int? = null
+    @Volatile private var sysfsGpuMinMhz: Int? = null
+    @Volatile private var sysfsGpuMaxMhz: Int? = null
+    @Volatile private var sysfsGpuGov: String? = null
+    @Volatile private var lastEnforcedCpuMinKhz: Map<Int, Int> = emptyMap()
+    @Volatile private var lastEnforcedCpuMaxKhz: Map<Int, Int> = emptyMap()
+    @Volatile private var lastEnforcedGpuMinMhz: Int? = null
+    @Volatile private var lastEnforcedGpuMaxMhz: Int? = null
+    @Volatile private var isEnforcerDaemonAlive: Boolean = false
+    @Volatile private var lastRootTelemetryPollMs: Long = 0L
+    @Volatile private var cachedSocZonePath: String? = null
+    @Volatile private var consecutiveDriftCount: Int = 0
+    @Volatile private var lastRamTelemetrySyncMs: Long = 0L
+    @Volatile private var lastUsageEventsQueryMs: Long = 0L
+    private var lastEnforcedNightActiveState: Boolean? = null
+
+    private val telemetryMutex = Mutex()
+    @Volatile
+    private var isTickingTelemetry: Boolean = false
+    @Volatile
+    private var pendingRetickRequested: Boolean = false
+    @Volatile
+    private var lastCompletedTelemetryMs: Long = 0L
+
+    private val internalBatteryReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+            val action = intent?.action ?: return
+            when (action) {
+                Intent.ACTION_BATTERY_CHANGED -> onBatteryChangedIntentReceived(intent)
+                Intent.ACTION_POWER_CONNECTED -> notifyPowerConnected()
+                Intent.ACTION_POWER_DISCONNECTED -> notifyPowerDisconnected()
+                Intent.ACTION_SCREEN_ON -> notifyScreenStateChanged(isInteractive = true)
+                Intent.ACTION_SCREEN_OFF -> notifyScreenStateChanged(isInteractive = false)
+            }
+        }
+    }
+
     init {
         loadInstalledApps()
         seedSampleLogsIfEmpty()
         refreshDeviceRamAndVramTelemetrySync()
+        registerLiveBatteryBroadcastReceiver()
         initFrameGenCapabilitiesAndGameScanAsync()
         initRootFpsPermissionsAndChoreographer()
         startContinuousWholeScreenFpsLoop()
+        startLiveBatteryAndTelemetryLoop()
         initAdBlockerEngineAsync()
+        tickTelemetry(force = true)
+    }
+
+    private fun registerLiveBatteryBroadcastReceiver() {
+        try {
+            val appCtx = context.applicationContext ?: context
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_BATTERY_CHANGED)
+                addAction(Intent.ACTION_POWER_CONNECTED)
+                addAction(Intent.ACTION_POWER_DISCONNECTED)
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_SCREEN_OFF)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                appCtx.registerReceiver(internalBatteryReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                appCtx.registerReceiver(internalBatteryReceiver, filter)
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun startLiveBatteryAndTelemetryLoop() {
+        scope.launch {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+            while (true) {
+                try {
+                    tickTelemetryAndWait(force = false)
+                } catch (_: Throwable) {
+                }
+                val isInteractive = powerManager?.isInteractive ?: true
+                val bat = _batteryFlow.value
+                val isOverlayOn = _fpsOverlayConfigFlow.value.isEnabled
+                val intervalMs = when {
+                    isMainActivityInForeground || isOverlayOn -> 1_200L
+                    isInteractive || bat.isCharging || bat.isPluggedIn -> 2_000L
+                    else -> 15_000L
+                }
+                kotlinx.coroutines.delay(intervalMs)
+            }
+        }
+    }
+
+    fun onBatteryChangedIntentReceived(intent: Intent) {
+        lastBatteryChangedIntent = intent
+        val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+        val plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
+        val intentCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+        val prevCharging = lastBatteryIntentChargingState
+        val stateChanged = (prevCharging != null && prevCharging != intentCharging) ||
+            (plugged != 0) != _batteryFlow.value.isPluggedIn
+        lastBatteryIntentChargingState = intentCharging
+
+        if (stateChanged) {
+            lastSysfsBatteryReadMs = 0L
+            sysfsStatusCharging = null
+            sysfsCurrentMa = null
+            tickTelemetry(force = true)
+        } else {
+            val nowMs = SystemClock.elapsedRealtime()
+            val curBat = _batteryFlow.value
+            val rawLevel = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val rawScale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+            val intentPct = if (rawLevel >= 0 && rawScale > 0) (rawLevel * 100 / rawScale).coerceIn(0, 100) else curBat.levelPercent
+            val intentTempC = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, (curBat.temperatureC * 10f).toInt()) / 10f
+            val intentVoltMv = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, curBat.voltageMv)
+
+            val significantChange = intentPct != curBat.levelPercent ||
+                kotlin.math.abs(intentTempC - curBat.temperatureC) >= 0.2f ||
+                kotlin.math.abs(intentVoltMv - curBat.voltageMv) >= 15
+
+            if (significantChange || (nowMs - lastCompletedTelemetryMs) >= 800L) {
+                tickTelemetry(force = significantChange)
+            }
+        }
     }
 
     fun notifyOverlaySelfRedraw() {
@@ -1201,6 +1364,16 @@ class KernelRepository private constructor(private val context: Context) {
         if (isVisible) {
             FrameGenMiniOverlayManager.onGameClosedOrLeftForeground(context)
             onForegroundAppChanged(context.packageName, "MainActivity")
+            tickTelemetry(force = true)
+        } else {
+            persistBatteryCheckpoint()
+        }
+    }
+
+    fun persistBatteryCheckpoint() {
+        try {
+            batteryStatsTracker.persistCheckpoint()
+        } catch (_: Throwable) {
         }
     }
 
@@ -1235,8 +1408,6 @@ class KernelRepository private constructor(private val context: Context) {
         }
         return false
     }
-
-    @Volatile private var lastUsageEventsQueryMs: Long = 0L
 
     private fun detectForegroundPackageViaUsageStats(): String? {
         if (isMainActivityInForeground) {
@@ -1928,6 +2099,20 @@ class KernelRepository private constructor(private val context: Context) {
         return null
     }
 
+    private fun readDirectSysfsLongAllowZero(vararg paths: String): Long? {
+        for (path in paths) {
+            try {
+                val f = java.io.File(path)
+                if (f.exists() && f.canRead()) {
+                    val v = f.readText().trim().toLongOrNull()
+                    if (v != null) return v
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return null
+    }
+
     private fun readDirectSysfsString(vararg paths: String): String? {
         for (path in paths) {
             try {
@@ -2050,19 +2235,22 @@ class KernelRepository private constructor(private val context: Context) {
     }
 
     fun notifyPowerDisconnected() {
+        lastSysfsBatteryReadMs = 0L
         sysfsStatusCharging = false
+        sysfsCurrentMa = null
         hasTriggeredFullChargeResetThisCycle = false
         hasTriggeredCustomLevelResetThisCycle = false
         val snap = readInstantHardwareBatterySnapshot()
         _batteryFlow.value = _batteryFlow.value.copy(
             isCharging = false,
+            isPluggedIn = false,
             levelPercent = snap.batPct
         )
         if (_freshStartConfigFlow.value.autoFreshStartOnUnplug) {
             startFreshTelemetrySession(reason = "Charger Unplugged")
         } else {
             batteryStatsTracker.onUnplugged(snap.batPct, snap.chargeCounterMah)
-            tickTelemetry()
+            tickTelemetry(force = true)
         }
     }
 
@@ -2077,14 +2265,16 @@ class KernelRepository private constructor(private val context: Context) {
             currentMa = snap.currentMa,
             chargeCounterMah = snap.chargeCounterMah
         )
-        tickTelemetry()
+        tickTelemetry(force = true)
     }
 
     fun notifyPowerConnected() {
+        lastSysfsBatteryReadMs = 0L
         sysfsStatusCharging = true
+        sysfsCurrentMa = null
         hasTriggeredFullChargeResetThisCycle = false
         hasTriggeredCustomLevelResetThisCycle = false
-        _batteryFlow.value = _batteryFlow.value.copy(isCharging = true)
+        _batteryFlow.value = _batteryFlow.value.copy(isCharging = true, isPluggedIn = true)
         lastChargingEnforcementMs = 0L
         lastChargingEnforcedSignature = ""
         lastFullChargingVerifyMs = 0L
@@ -2092,11 +2282,9 @@ class KernelRepository private constructor(private val context: Context) {
         if (_freshStartConfigFlow.value.autoFreshStartOnPlugIn) {
             startFreshTelemetrySession(reason = "Charger Plugged In")
         } else {
-            tickTelemetry()
+            tickTelemetry(force = true)
         }
     }
-
-    private var lastEnforcedNightActiveState: Boolean? = null
 
     private data class NightScheduleEval(
         val isWindowOpen: Boolean,
@@ -2369,9 +2557,13 @@ class KernelRepository private constructor(private val context: Context) {
                             sysfsVoltageMv = normalizedMv
                         }
                     }
-                    if (rawTemp != null && rawTemp in 100..850) {
-                        sysfsTempC = rawTemp / 10.0f
+                    if (rawTemp != null) {
+                        when (rawTemp) {
+                            in 100..850 -> sysfsTempC = rawTemp / 10.0f
+                            in 10000..85000 -> sysfsTempC = rawTemp / 1000.0f
+                        }
                     }
+                    lastSysfsBatteryReadMs = SystemClock.elapsedRealtime()
                     if (rawCycles != null && rawCycles in 1..5000) {
                         sysfsCycleCount = rawCycles
                     } else if (dumpsysBatt.isNotBlank()) {
@@ -2400,24 +2592,6 @@ class KernelRepository private constructor(private val context: Context) {
         }
     }
 
-    @Volatile private var sysfsCpuCurKhz: Map<Int, Int> = emptyMap()
-    @Volatile private var sysfsCpuMinKhz: Map<Int, Int> = emptyMap()
-    @Volatile private var sysfsCpuMaxKhz: Map<Int, Int> = emptyMap()
-    @Volatile private var sysfsCpuGov: Map<Int, String> = emptyMap()
-    @Volatile private var sysfsGpuCurMhz: Int? = null
-    @Volatile private var sysfsGpuMinMhz: Int? = null
-    @Volatile private var sysfsGpuMaxMhz: Int? = null
-    @Volatile private var sysfsGpuGov: String? = null
-    @Volatile private var lastEnforcedCpuMinKhz: Map<Int, Int> = emptyMap()
-    @Volatile private var lastEnforcedCpuMaxKhz: Map<Int, Int> = emptyMap()
-    @Volatile private var lastEnforcedGpuMinMhz: Int? = null
-    @Volatile private var lastEnforcedGpuMaxMhz: Int? = null
-    @Volatile private var isEnforcerDaemonAlive: Boolean = false
-    @Volatile private var lastRootTelemetryPollMs: Long = 0L
-    @Volatile private var cachedSocZonePath: String? = null
-    @Volatile private var consecutiveDriftCount: Int = 0
-    @Volatile private var lastRamTelemetrySyncMs: Long = 0L
-
     private fun formatDurationCompact(ms: Long): String {
         val totalSec = (ms / 1000L).coerceAtLeast(0L)
         if (totalSec < 60L) return "${totalSec}s"
@@ -2435,16 +2609,37 @@ class KernelRepository private constructor(private val context: Context) {
         // Telemetry reset feature removed
     }
 
-    @Volatile
-    private var isTickingTelemetry: Boolean = false
-
-    // Telemetry tick called periodically by DragonMonitorService or UI (non-blocking, runs on Dispatchers.IO)
-    fun tickTelemetry() {
-        if (isTickingTelemetry) return
-        isTickingTelemetry = true
+    // Telemetry tick called periodically by DragonMonitorService, internal loop, or UI
+    fun tickTelemetry(force: Boolean = false) {
+        if (isTickingTelemetry) {
+            if (force) pendingRetickRequested = true
+            return
+        }
         scope.launch {
+            tickTelemetryAndWait(force = force)
+        }
+    }
+
+    suspend fun tickTelemetryAndWait(force: Boolean = false) {
+        val nowMs = SystemClock.elapsedRealtime()
+        if (!force && (nowMs - lastCompletedTelemetryMs) < 350L) {
+            return
+        }
+        if (telemetryMutex.isLocked && force) {
+            pendingRetickRequested = true
+        }
+        telemetryMutex.withLock {
+            val lockedNowMs = SystemClock.elapsedRealtime()
+            if (!force && !pendingRetickRequested && (lockedNowMs - lastCompletedTelemetryMs) < 350L) {
+                return
+            }
+            isTickingTelemetry = true
             try {
-                tickTelemetryInternal()
+                do {
+                    pendingRetickRequested = false
+                    tickTelemetryInternal()
+                    lastCompletedTelemetryMs = SystemClock.elapsedRealtime()
+                } while (pendingRetickRequested)
             } catch (_: Throwable) {
             } finally {
                 isTickingTelemetry = false
@@ -2453,6 +2648,7 @@ class KernelRepository private constructor(private val context: Context) {
     }
 
     private suspend fun tickTelemetryInternal() {
+        val directSysfsReadTimeMs = SystemClock.elapsedRealtime()
         val directStatusStr = try {
             val f = java.io.File("/sys/class/power_supply/battery/status")
             if (f.exists() && f.canRead()) f.readText().trim() else null
@@ -2461,19 +2657,22 @@ class KernelRepository private constructor(private val context: Context) {
         if (directStatusStr != null) {
             if (directStatusStr.equals("Charging", ignoreCase = true) || directStatusStr.equals("Full", ignoreCase = true)) {
                 sysfsStatusCharging = true
+                lastSysfsBatteryReadMs = directSysfsReadTimeMs
             } else if (directStatusStr.equals("Discharging", ignoreCase = true) || directStatusStr.equals("Not charging", ignoreCase = true)) {
                 sysfsStatusCharging = false
+                lastSysfsBatteryReadMs = directSysfsReadTimeMs
             }
         }
 
-        // Read battery cell current directly (never fallback to usb/current_now which is USB VBUS input current!)
-        val directCurRaw = readDirectSysfsLong(
+        // Read battery cell current directly (including 0 mA during bypass charging)
+        val directCurRaw = readDirectSysfsLongAllowZero(
             "/sys/class/power_supply/battery/current_now",
             "/sys/class/power_supply/bms/current_now"
         )
         if (directCurRaw != null) {
             val absCur = kotlin.math.abs(directCurRaw)
             sysfsCurrentMa = if (absCur > 30000L) (absCur / 1000L).toInt() else absCur.toInt()
+            lastSysfsBatteryReadMs = directSysfsReadTimeMs
         }
 
         val directVoltRaw = readDirectSysfsLong(
@@ -2483,12 +2682,27 @@ class KernelRepository private constructor(private val context: Context) {
         )
         if (directVoltRaw != null && directVoltRaw > 0L) {
             val normMv = if (directVoltRaw > 20000L) (directVoltRaw / 1000L).toInt() else directVoltRaw.toInt()
-            if (normMv in 2500..22000) sysfsVoltageMv = normMv
+            if (normMv in 2500..22000) {
+                sysfsVoltageMv = normMv
+                lastSysfsBatteryReadMs = directSysfsReadTimeMs
+            }
         }
 
-        val directTempRaw = readDirectSysfsLong("/sys/class/power_supply/battery/temp")
-        if (directTempRaw != null && directTempRaw in 100L..850L) {
-            sysfsTempC = directTempRaw / 10.0f
+        val directTempRaw = readDirectSysfsLong(
+            "/sys/class/power_supply/battery/temp",
+            "/sys/class/power_supply/bms/temp"
+        )
+        if (directTempRaw != null) {
+            when (directTempRaw) {
+                in 100L..850L -> {
+                    sysfsTempC = directTempRaw / 10.0f
+                    lastSysfsBatteryReadMs = directSysfsReadTimeMs
+                }
+                in 10000L..85000L -> {
+                    sysfsTempC = directTempRaw / 1000.0f
+                    lastSysfsBatteryReadMs = directSysfsReadTimeMs
+                }
+            }
         }
 
         // Try reading thermal state, enforcer pid, CPU & GPU telemetry in-process first (0 shell forks!)
@@ -2573,13 +2787,18 @@ class KernelRepository private constructor(private val context: Context) {
         }
 
         val nowElapsedTelemMs = SystemClock.elapsedRealtime()
+        val pmForPoll = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        val isInteractiveNow = pmForPoll?.isInteractive ?: true
+        val isActivelyChargingOrPlugged = _batteryFlow.value.isCharging || _batteryFlow.value.isPluggedIn
+        val isOverlayEnabledNow = _fpsOverlayConfigFlow.value.isEnabled
         val missingCriticalDirect = (directCurRaw == null || directC0Max == null || directC1Max == null || directC2Max == null)
         val hasFullDirectTelem = !missingCriticalDirect && parsedThermStateLine != null && parsedSocTempC != null && isEnforcerDaemonAlive
         val rootPollMinIntervalMs = when {
-            isMainActivityInForeground && missingCriticalDirect -> 2_500L
-            isMainActivityInForeground -> 6_000L
-            hasFullDirectTelem -> 60_000L
-            else -> 45_000L
+            isMainActivityInForeground && missingCriticalDirect -> 1_500L
+            isMainActivityInForeground -> 4_000L
+            isInteractiveNow || isActivelyChargingOrPlugged || isOverlayEnabledNow -> 2_500L
+            hasFullDirectTelem -> 30_000L
+            else -> 15_000L
         }
 
         // Only query persistent su pipe when direct reads missed critical nodes or on the low-frequency heartbeat
@@ -2655,9 +2874,13 @@ class KernelRepository private constructor(private val context: Context) {
                                 if (normMv in 2500..22000) sysfsVoltageMv = normMv
                             }
                             val t = parts.getOrNull(3)?.trim()?.toLongOrNull()
-                            if (t != null && t in 100L..850L) {
-                                sysfsTempC = t / 10.0f
+                            if (t != null) {
+                                when (t) {
+                                    in 100L..850L -> sysfsTempC = t / 10.0f
+                                    in 10000L..85000L -> sysfsTempC = t / 1000.0f
+                                }
                             }
+                            lastSysfsBatteryReadMs = SystemClock.elapsedRealtime()
                         } else if (trimmed.startsWith("CLOCKS:")) {
                             val parts = trimmed.removePrefix("CLOCKS:").split(":")
                             val c0 = parts.getOrNull(0)?.trim()?.toIntOrNull()?.takeIf { it in 100_000..4_500_000 }
@@ -2763,7 +2986,11 @@ class KernelRepository private constructor(private val context: Context) {
         // Read real battery stats if available
         val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
         val ifilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        val bStatus = context.registerReceiver(null, ifilter)
+        val bStatus = try {
+            context.registerReceiver(null, ifilter) ?: lastBatteryChangedIntent
+        } catch (_: Exception) {
+            lastBatteryChangedIntent
+        }
 
         val sysfsCapacityRaw = readDirectSysfsLong(
             "/sys/class/power_supply/battery/capacity",
@@ -2771,18 +2998,22 @@ class KernelRepository private constructor(private val context: Context) {
             "/sys/class/power_supply/fg/capacity"
         )
 
+        val bmPropCap = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 0..100 }
         val rawLevel = bStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val rawScale = bStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: 100
-        val bmPct = if (rawLevel > 0 && rawScale > 0) (rawLevel * 100 / rawScale) else -1
+        val bmPct = if (rawLevel >= 0 && rawScale > 0) (rawLevel * 100 / rawScale) else -1
 
         val directCounterFallback = readDirectSysfsLong(
             "/sys/class/power_supply/battery/charge_counter",
             "/sys/class/power_supply/bms/charge_counter"
         )?.let { normalizeCapacityToMah(it) }
 
+        val rawBmChargeCounter = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
+            ?.takeIf { it != Int.MIN_VALUE && it > 0 }?.toLong()
+
         val currentCounterMah = sysfsChargeCounterMah
             ?: directCounterFallback
-            ?: normalizeCapacityToMah(bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)?.toLong())
+            ?: normalizeCapacityToMah(rawBmChargeCounter)
 
         val currentLearnedFullMah = sysfsChargeFullMah
             ?: _batteryFlow.value.learnedFullCapacityMah.takeIf { it in 500..25000 }
@@ -2794,20 +3025,22 @@ class KernelRepository private constructor(private val context: Context) {
         val batPct = when {
             sysfsCapacityRaw != null && sysfsCapacityRaw in 1L..100L -> sysfsCapacityRaw.toInt()
             bmPct in 1..100 -> bmPct
+            bmPropCap != null && bmPropCap in 1..100 -> bmPropCap
             derivedFromCounterPct != null && derivedFromCounterPct in 1..100 -> derivedFromCounterPct
             _batteryFlow.value.levelPercent in 1..100 -> _batteryFlow.value.levelPercent
             else -> 78
         }.coerceIn(1, 100)
 
+        val isSysfsBatteryFresh = (SystemClock.elapsedRealtime() - lastSysfsBatteryReadMs) <= 3_500L
         val tempRaw = bStatus?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 335) ?: 335
-        val realTempC = sysfsTempC ?: (tempRaw / 10.0f)
+        val realTempC = if (isSysfsBatteryFresh && sysfsTempC != null) sysfsTempC!! else (tempRaw / 10.0f)
         val intentVoltageMv = bStatus?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 4150) ?: 4150
-        val voltageMv = sysfsVoltageMv ?: intentVoltageMv
+        val voltageMv = if (isSysfsBatteryFresh && sysfsVoltageMv != null) sysfsVoltageMv!! else intentVoltageMv
         val status = bStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
         val plugged = bStatus?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
-        val isPluggedIn = plugged != 0 || (sysfsStatusCharging == true) || (status == BatteryManager.BATTERY_STATUS_NOT_CHARGING)
         val isIntentCharging = (status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL)
-        val isRealCharging = sysfsStatusCharging ?: isIntentCharging
+        val isPluggedIn = plugged != 0 || (isSysfsBatteryFresh && sysfsStatusCharging == true) || (status == BatteryManager.BATTERY_STATUS_NOT_CHARGING)
+        val isRealCharging = if (isSysfsBatteryFresh && sysfsStatusCharging != null) sysfsStatusCharging!! else isIntentCharging
 
         // Evaluate automatic Fresh Telemetry session triggers when reaching 100% Full Charge or Custom Target %
         val freshCfg = _freshStartConfigFlow.value
@@ -2860,8 +3093,10 @@ class KernelRepository private constructor(private val context: Context) {
         }
 
         // Read real hardware current now and charge counter if available via BatteryManager or sysfs
-        val rawCurrentNow = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) ?: 0
-        val rawChargeCounter = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER) ?: 0
+        val rawCurrentNowProp = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) ?: Int.MIN_VALUE
+        val rawCurrentNow = if (rawCurrentNowProp != Int.MIN_VALUE) rawCurrentNowProp else 0
+        val rawChargeCounterProp = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER) ?: Int.MIN_VALUE
+        val rawChargeCounter = if (rawChargeCounterProp != Int.MIN_VALUE) rawChargeCounterProp else 0
 
         val charging = _chargingControlsFlow.value
         val profile = _activeProfileFlow.value
@@ -3066,11 +3301,11 @@ class KernelRepository private constructor(private val context: Context) {
         }
 
         // Normalize BatteryManager current_now (in µA on most Android devices, mA on others)
-        val bmAbsCurrentMa = kotlin.math.abs(rawCurrentNow).let { absVal ->
-            if (absVal > 30000) absVal / 1000 else absVal
+        val bmAbsCurrentMa = kotlin.math.abs(rawCurrentNow.toLong()).let { absVal ->
+            if (absVal > 30000L) (absVal / 1000L).toInt() else absVal.toInt()
         }
-        // Prefer root /sys/class/power_supply/battery/current_now (including 0 mA during bypass!), fallback to BatteryManager
-        val hardwareMeasuredMa = sysfsCurrentMa ?: bmAbsCurrentMa
+        // Prefer fresh sysfs /sys/class/power_supply/battery/current_now (including 0 mA during bypass!), fallback to BatteryManager
+        val hardwareMeasuredMa = if (isSysfsBatteryFresh && sysfsCurrentMa != null) sysfsCurrentMa!! else bmAbsCurrentMa
 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
         val isScreenInteractive = powerManager?.isInteractive ?: true
@@ -3078,9 +3313,9 @@ class KernelRepository private constructor(private val context: Context) {
         // True Hardware Verification for Bypass Mode:
         // Verified when kernel status is Not charging / Discharging OR battery cell current is <= 120 mA
         val isBypassVerified = isBypass && (
-            sysfsStatusCharging == false ||
+            (isSysfsBatteryFresh && sysfsStatusCharging == false) ||
             hardwareMeasuredMa <= 120 ||
-            kotlin.math.abs(rawCurrentNow) <= 120_000
+            kotlin.math.abs(rawCurrentNow.toLong()) <= 120_000L
         )
 
         // Closed-loop watchdog: if bypass is enabled while plugged in but kernel PMIC is still charging >120 mA, re-enforce
@@ -3827,6 +4062,12 @@ class KernelRepository private constructor(private val context: Context) {
                 if (res.output.contains("PROFILE_ENFORCED")) {
                     isEnforcerDaemonAlive = true
                 }
+                if (activeCustom != null && (activeCustom.id == INBUILT_PUGB_MOBILE_PROFILE_ID ||
+                            activeCustom.title.contains("PUGB", ignoreCase = true) ||
+                            activeCustom.title.contains("PUBG", ignoreCase = true))
+                ) {
+                    RootHelper.enforcePubgMobile120FpsGameTuning(context.packageName)
+                }
                 syncClustersAndGpuFromProfileEnforcedOutput(res.output)
             } else {
                 if (hasManualCpuTweaks || isAppProfileActive) {
@@ -4527,6 +4768,12 @@ class KernelRepository private constructor(private val context: Context) {
             if (res.output.contains("PROFILE_ENFORCED")) {
                 isEnforcerDaemonAlive = true
             }
+            if (cProfile.id == INBUILT_PUGB_MOBILE_PROFILE_ID ||
+                cProfile.title.contains("PUGB", ignoreCase = true) ||
+                cProfile.title.contains("PUBG", ignoreCase = true)
+            ) {
+                RootHelper.enforcePubgMobile120FpsGameTuning(context.packageName)
+            }
             syncClustersAndGpuFromProfileEnforcedOutput(res.output)
             lastPerformanceEnforcementMs = SystemClock.elapsedRealtime()
             tickTelemetry()
@@ -4804,16 +5051,20 @@ class KernelRepository private constructor(private val context: Context) {
             val cur = _perAppProfileConfigFlow.value
             val existingMap = cur.rules.associateBy { it.packageName.lowercase() }.toMutableMap()
             var addedCount = 0
+            val hasPugbCustom = _customProfilesFlow.value.any { it.id == INBUILT_PUGB_MOBILE_PROFILE_ID }
             for (app in installed) {
                 if (app.isSystem) continue
                 val pkgLower = app.packageName.lowercase()
                 val nameLower = app.appName.lowercase()
                 val isGame = gameKeywords.any { kw -> pkgLower.contains(kw) || nameLower.contains(kw) }
                 if (isGame && !existingMap.containsKey(pkgLower)) {
+                    val isPubgPkg = pkgLower.contains("pubg") || pkgLower.contains("tencent.ig") || pkgLower.contains("bgmi") ||
+                        nameLower.contains("pubg") || nameLower.contains("pugb") || nameLower.contains("battlegrounds mobile")
                     existingMap[pkgLower] = AppBatteryProfileRule(
                         packageName = app.packageName,
                         appName = app.appName,
                         profile = BatteryProfile.GAMING,
+                        customProfileId = if (isPubgPkg && hasPugbCustom) INBUILT_PUGB_MOBILE_PROFILE_ID else null,
                         refreshRateHz = 120,
                         enableBypassCharging = true,
                         clearRamOnLaunch = true
@@ -6761,6 +7012,27 @@ class KernelRepository private constructor(private val context: Context) {
         _lastActionFeedbackFlow.value = "Liquid Glass Tint: $tint"
     }
 
+    fun setHapticFeedbackEnabled(enabled: Boolean) {
+        updateThemeConfig {
+            it.copy(hapticFeedbackEnabled = enabled)
+        }
+        _lastActionFeedbackFlow.value = if (enabled) {
+            "Tactile Haptic Feedback Enabled"
+        } else {
+            "Haptic Feedback Muted"
+        }
+    }
+
+    fun setHapticIntensity(intensity: HapticIntensity) {
+        updateThemeConfig {
+            it.copy(
+                hapticFeedbackEnabled = true,
+                hapticIntensity = intensity
+            )
+        }
+        _lastActionFeedbackFlow.value = "Haptic Profile: ${intensity.title}"
+    }
+
     fun toggleCustomPrimaryColor(enabled: Boolean) {
         updateThemeConfig {
             it.copy(
@@ -8500,6 +8772,15 @@ class KernelRepository private constructor(private val context: Context) {
             scope = scope,
             onFeedback = { msg -> _lastActionFeedbackFlow.value = msg }
         )
+    }
+
+    // In-App Multi-Tab Browser Repository (Google Home, History, Bookmarks, Incognito, Grabber)
+    val browserRepository: com.example.data.browser.BrowserStateRepository by lazy {
+        com.example.data.browser.BrowserStateRepository(context = context)
+    }
+
+    fun showActionFeedback(message: String) {
+        _lastActionFeedbackFlow.value = message
     }
 
     // Dragon Gaming Visual Style Engine Manager

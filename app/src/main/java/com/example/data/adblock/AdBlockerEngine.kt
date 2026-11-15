@@ -597,6 +597,95 @@ EOF
         )
     }
 
+    private val BROWSER_WEB_AD_DOMAINS = setOf(
+        "doubleclick.net",
+        "googlesyndication.com",
+        "googleadservices.com",
+        "adservice.google.com",
+        "googletagmanager.com",
+        "google-analytics.com",
+        "taboola.com",
+        "outbrain.com",
+        "criteo.com",
+        "pubmatic.com",
+        "rubiconproject.com",
+        "openx.net",
+        "adnxs.com",
+        "popads.net",
+        "popcash.net",
+        "propellerads.com",
+        "exoclick.com",
+        "juicyads.com",
+        "trafficjunky.net",
+        "trafficjunky.com",
+        "mgid.com",
+        "amazon-adsystem.com",
+        "moatads.com",
+        "scorecardresearch.com",
+        "quantserve.com",
+        "ads.yahoo.com",
+        "adsrvr.org",
+        "adroll.com",
+        "bidswitch.net",
+        "casalemedia.com",
+        "smartadserver.com",
+        "revcontent.com",
+        "advertising.com",
+        "zedo.com"
+    )
+
+    private val STATIC_AD_HOST_SET: Set<String> by lazy {
+        HashSet<String>().apply {
+            addAll(YOUTUBE_DOMAINS)
+            addAll(FACEBOOK_DOMAINS)
+            addAll(INSTAGRAM_DOMAINS)
+            addAll(TIKTOK_DOMAINS)
+            addAll(SNAPCHAT_DOMAINS)
+            addAll(OTHER_SOCIAL_DOMAINS)
+            addAll(EMBEDDED_AD_SDK_DOMAINS)
+            addAll(BROWSER_WEB_AD_DOMAINS)
+        }
+    }
+
+    fun isBrowserUrlBlocked(url: String, config: AdBlockerConfig? = null): Boolean {
+        if (config != null && !config.isGlobalEnabled) return false
+        val host = try {
+            java.net.URI(url).host?.lowercase(java.util.Locale.US)?.removePrefix("www.") ?: ""
+        } catch (_: Exception) {
+            ""
+        }
+        if (host.isBlank()) return false
+
+        val whitelist = config?.customWhitelistDomains.orEmpty()
+        if (whitelist.any { w ->
+                val clean = w.trim().lowercase(java.util.Locale.US)
+                clean.isNotEmpty() && (host == clean || host.endsWith(".$clean"))
+            }
+        ) {
+            return false
+        }
+
+        val custom = config?.customBlacklistDomains.orEmpty()
+        if (custom.any { c ->
+                val clean = c.trim().lowercase(java.util.Locale.US)
+                clean.isNotEmpty() && (host == clean || host.endsWith(".$clean"))
+            }
+        ) {
+            return true
+        }
+
+        // Exact host or parent-domain walk against static ad sets
+        var candidate = host
+        while (candidate.contains('.')) {
+            if (STATIC_AD_HOST_SET.contains(candidate)) return true
+            candidate = candidate.substringAfter('.')
+        }
+
+        val lowerUrl = url.lowercase(java.util.Locale.US)
+        return (host.startsWith("ads.") || host.startsWith("ad.") || host.startsWith("adserver.") || host.contains("pagead")) &&
+            !host.endsWith("google.com")
+    }
+
     fun generateEventForBlockedDomain(platform: SocialPlatform): AdBlockEvent {
         val domainList = getDomainsForPlatform(platform)
         val randomDomain = if (domainList.isNotEmpty()) domainList.random() else "adservice.google.com"

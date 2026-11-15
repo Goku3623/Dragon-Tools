@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.ui.haptics.LocalDragonHaptics
 import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.cos
@@ -43,6 +44,7 @@ fun DragonSplashScreen(
     onDismiss: () -> Unit
 ) {
     // 2-second full-bleed anime opening sequence controller
+    val haptics = LocalDragonHaptics.current
     var isVisible by remember { mutableStateOf(true) }
     var entranceTriggered by remember { mutableStateOf(false) }
 
@@ -152,6 +154,7 @@ fun DragonSplashScreen(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) {
+                haptics.tap()
                 onDismiss()
             }
     ) {
@@ -392,7 +395,7 @@ fun DragonSplashScreen(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "CRIMSON DRAGON ENGINE • KERNEL & CHARGING v2.1",
+                text = "CRIMSON DRAGON ENGINE • KERNEL & CHARGING v3.0",
                 style = MaterialTheme.typography.labelMedium.copy(
                     fontWeight = FontWeight.ExtraBold,
                     letterSpacing = 1.6.sp,

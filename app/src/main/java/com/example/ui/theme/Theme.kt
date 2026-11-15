@@ -14,6 +14,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.data.model.SurfaceThemeMode
 import com.example.data.model.ThemeCustomizationConfig
+import com.example.ui.haptics.LocalDragonHaptics
+import com.example.ui.haptics.rememberDragonHaptics
 
 data class GamingAccentOption(
     val name: String,
@@ -231,7 +233,15 @@ fun DragonKernelTheme(
         extraLarge = RoundedCornerShape((radius + 8).dp)
     )
 
-    CompositionLocalProvider(LocalThemeCustomization provides resolvedConfig) {
+    val dragonHaptics = rememberDragonHaptics(
+        enabled = resolvedConfig.hapticFeedbackEnabled,
+        intensity = resolvedConfig.hapticIntensity
+    )
+
+    CompositionLocalProvider(
+        LocalThemeCustomization provides resolvedConfig,
+        LocalDragonHaptics provides dragonHaptics
+    ) {
         MaterialTheme(
             colorScheme = colorScheme,
             typography = Typography,

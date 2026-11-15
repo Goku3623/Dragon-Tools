@@ -28,6 +28,7 @@ import com.example.data.model.ChargingSpeedMode
 import com.example.data.model.CurrentLimiterThermalMode
 import com.example.data.model.NightChargingScheduleMode
 import com.example.data.repository.KernelRepository
+import com.example.ui.haptics.LocalDragonHaptics
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.SuccessGreen
@@ -37,6 +38,7 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun BatteryScreen(repository: KernelRepository) {
+    val haptics = LocalDragonHaptics.current
     val battery by repository.batteryFlow.collectAsState()
     val chargingControls by repository.chargingControlsFlow.collectAsState()
     val freshStartConfig by repository.freshStartConfigFlow.collectAsState()
@@ -132,28 +134,40 @@ fun BatteryScreen(repository: KernelRepository) {
             ) {
                 Tab(
                     selected = selectedSubTab == 0,
-                    onClick = { selectedSubTab = 0 },
+                    onClick = {
+                        haptics.tabSelect()
+                        selectedSubTab = 0
+                    },
                     modifier = Modifier.testTag("tab_poco_f6_profiles"),
                     text = { Text("Profiles", fontWeight = FontWeight.Bold, fontSize = 11.5.sp) },
                     icon = { Icon(Icons.Default.Speed, contentDescription = "Profiles", modifier = Modifier.size(17.dp)) }
                 )
                 Tab(
                     selected = selectedSubTab == 1,
-                    onClick = { selectedSubTab = 1 },
+                    onClick = {
+                        haptics.tabSelect()
+                        selectedSubTab = 1
+                    },
                     modifier = Modifier.testTag("tab_per_app_profiles"),
                     text = { Text("Per-App", fontWeight = FontWeight.Bold, fontSize = 11.5.sp) },
                     icon = { Icon(Icons.Default.AppShortcut, contentDescription = "Per-App", modifier = Modifier.size(17.dp)) }
                 )
                 Tab(
                     selected = selectedSubTab == 2,
-                    onClick = { selectedSubTab = 2 },
+                    onClick = {
+                        haptics.tabSelect()
+                        selectedSubTab = 2
+                    },
                     modifier = Modifier.testTag("tab_charging_controls"),
                     text = { Text("Charging", fontWeight = FontWeight.Bold, fontSize = 11.5.sp) },
                     icon = { Icon(Icons.Default.FlashOn, contentDescription = "Charging", modifier = Modifier.size(17.dp)) }
                 )
                 Tab(
                     selected = selectedSubTab == 3,
-                    onClick = { selectedSubTab = 3 },
+                    onClick = {
+                        haptics.tabSelect()
+                        selectedSubTab = 3
+                    },
                     modifier = Modifier.testTag("tab_battery_health"),
                     text = { Text("Health", fontWeight = FontWeight.Bold, fontSize = 11.5.sp) },
                     icon = { Icon(Icons.Default.BatteryStd, contentDescription = "Health", modifier = Modifier.size(17.dp)) }
@@ -264,7 +278,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                         )
                                     }
                                     IconButton(
-                                        onClick = { repository.grantRootAndRefreshBatteryHealth() },
+                                        onClick = {
+                                            haptics.confirm()
+                                            repository.grantRootAndRefreshBatteryHealth()
+                                        },
                                         modifier = Modifier.size(32.dp)
                                     ) {
                                         Icon(
@@ -527,7 +544,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                 val isSelected = freshStartConfig.telemetryBaselineMode == modeKey
                                 FilterChip(
                                     selected = isSelected,
-                                    onClick = { repository.setFreshStartBaselinePreset(modeKey) },
+                                    onClick = {
+                                        haptics.tap()
+                                        repository.setFreshStartBaselinePreset(modeKey)
+                                    },
                                     label = {
                                         Text(
                                             text = label,
@@ -583,6 +603,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                 Switch(
                                     checked = freshStartConfig.autoFreshStartOnUnplug,
                                     onCheckedChange = { enabled ->
+                                        haptics.toggle(enabled)
                                         repository.updateFreshStartConfig(
                                             freshStartConfig.copy(autoFreshStartOnUnplug = enabled)
                                         )
@@ -614,6 +635,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                 Switch(
                                     checked = freshStartConfig.autoFreshStartOnFullCharge,
                                     onCheckedChange = { enabled ->
+                                        haptics.toggle(enabled)
                                         repository.updateFreshStartConfig(
                                             freshStartConfig.copy(autoFreshStartOnFullCharge = enabled)
                                         )
@@ -645,6 +667,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                 Switch(
                                     checked = freshStartConfig.autoFreshStartOnCustomChargeLevel,
                                     onCheckedChange = { enabled ->
+                                        haptics.toggle(enabled)
                                         repository.updateFreshStartConfig(
                                             freshStartConfig.copy(autoFreshStartOnCustomChargeLevel = enabled)
                                         )
@@ -663,6 +686,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                             FilterChip(
                                                 selected = isPctSelected,
                                                 onClick = {
+                                                    haptics.tap()
                                                     repository.updateFreshStartConfig(
                                                         freshStartConfig.copy(customFreshStartChargePercent = pct)
                                                     )
@@ -674,6 +698,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                     Slider(
                                         value = freshStartConfig.customFreshStartChargePercent.toFloat(),
                                         onValueChange = { newVal ->
+                                            haptics.sliderTick()
                                             repository.updateFreshStartConfig(
                                                 freshStartConfig.copy(customFreshStartChargePercent = newVal.toInt())
                                             )
@@ -708,6 +733,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                 Switch(
                                     checked = freshStartConfig.autoFreshStartOnPlugIn,
                                     onCheckedChange = { enabled ->
+                                        haptics.toggle(enabled)
                                         repository.updateFreshStartConfig(
                                             freshStartConfig.copy(autoFreshStartOnPlugIn = enabled)
                                         )
@@ -739,6 +765,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                 Switch(
                                     checked = freshStartConfig.autoFreshStartOnBoot,
                                     onCheckedChange = { enabled ->
+                                        haptics.toggle(enabled)
                                         repository.updateFreshStartConfig(
                                             freshStartConfig.copy(autoFreshStartOnBoot = enabled)
                                         )
@@ -750,7 +777,10 @@ fun BatteryScreen(repository: KernelRepository) {
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Button(
-                            onClick = { repository.startFreshTelemetrySession("Manual Reset") },
+                            onClick = {
+                                haptics.heavyAction()
+                                repository.startFreshTelemetrySession("Manual Reset")
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
@@ -841,7 +871,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                 }
                                 Switch(
                                     checked = chargingControls.chargingPresetsEnabled,
-                                    onCheckedChange = { repository.toggleChargingPresets(it) },
+                                    onCheckedChange = {
+                                        haptics.toggle(it)
+                                        repository.toggleChargingPresets(it)
+                                    },
                                     modifier = Modifier.testTag("charging_presets_switch")
                                 )
                             }
@@ -875,7 +908,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                             modifier = Modifier
                                                 .weight(1f)
                                                 .clip(RoundedCornerShape(12.dp))
-                                                .clickable { repository.setChargingSpeedMode(mode) }
+                                                .clickable {
+                                                    haptics.confirm()
+                                                    repository.setChargingSpeedMode(mode)
+                                                }
                                                 .border(
                                                     width = if (isSelected) 1.5.dp else 1.dp,
                                                     color = if (isSelected) SuccessGreen else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
@@ -969,7 +1005,10 @@ fun BatteryScreen(repository: KernelRepository) {
                             }
                             Switch(
                                 checked = chargingControls.bypassCharging,
-                                onCheckedChange = { repository.toggleBypassCharging(it) }
+                                onCheckedChange = {
+                                    haptics.toggle(it)
+                                    repository.toggleBypassCharging(it)
+                                }
                             )
                         }
 
@@ -1027,7 +1066,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                         }
 
                                         FilledTonalButton(
-                                            onClick = { repository.toggleBypassCharging(true) },
+                                            onClick = {
+                                                haptics.confirm()
+                                                repository.toggleBypassCharging(true)
+                                            },
                                             modifier = Modifier.height(28.dp),
                                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                                         ) {
@@ -1101,7 +1143,10 @@ fun BatteryScreen(repository: KernelRepository) {
                             }
                             Switch(
                                 checked = night.isEnabled,
-                                onCheckedChange = { repository.toggleNightCharging(it) }
+                                onCheckedChange = {
+                                    haptics.toggle(it)
+                                    repository.toggleNightCharging(it)
+                                }
                             )
                         }
 
@@ -1156,7 +1201,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                         if (night.scheduleMode != NightChargingScheduleMode.ALWAYS_ACTIVE) {
                                             Spacer(modifier = Modifier.width(8.dp))
                                             OutlinedButton(
-                                                onClick = { repository.toggleNightSimulation(!night.isSimulationForced) },
+                                                onClick = {
+                                                    haptics.tap()
+                                                    repository.toggleNightSimulation(!night.isSimulationForced)
+                                                },
                                                 shape = RoundedCornerShape(8.dp),
                                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                                                 modifier = Modifier.height(30.dp)
@@ -1185,19 +1233,28 @@ fun BatteryScreen(repository: KernelRepository) {
                                     val isWhisper = night.targetLimitPercent == 85 && night.trickleCurrentMa == 500
                                     FilterChip(
                                         selected = isUltra,
-                                        onClick = { repository.applyNightPreset("ULTRA_LONGEVITY") },
+                                        onClick = {
+                                            haptics.tap()
+                                            repository.applyNightPreset("ULTRA_LONGEVITY")
+                                        },
                                         label = { Text("Ultra 80% • 0.8A", fontSize = 9.5.sp, fontWeight = FontWeight.Bold) },
                                         modifier = Modifier.weight(1f)
                                     )
                                     FilterChip(
                                         selected = isBalanced,
-                                        onClick = { repository.applyNightPreset("BALANCED_MORNING") },
+                                        onClick = {
+                                            haptics.tap()
+                                            repository.applyNightPreset("BALANCED_MORNING")
+                                        },
                                         label = { Text("Morning 80% • 1.2A", fontSize = 9.5.sp, fontWeight = FontWeight.Bold) },
                                         modifier = Modifier.weight(1f)
                                     )
                                     FilterChip(
                                         selected = isWhisper,
-                                        onClick = { repository.applyNightPreset("WHISPER_COLD") },
+                                        onClick = {
+                                            haptics.tap()
+                                            repository.applyNightPreset("WHISPER_COLD")
+                                        },
                                         label = { Text("Whisper 85% • 0.5A", fontSize = 9.5.sp, fontWeight = FontWeight.Bold) },
                                         modifier = Modifier.weight(1f)
                                     )
@@ -1215,7 +1272,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                     NightChargingScheduleMode.entries.forEach { mode ->
                                         FilterChip(
                                             selected = night.scheduleMode == mode,
-                                            onClick = { repository.setNightChargingScheduleMode(mode) },
+                                            onClick = {
+                                                haptics.tap()
+                                                repository.setNightChargingScheduleMode(mode)
+                                            },
                                             label = { Text(mode.label, fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
                                             modifier = Modifier.weight(1f)
                                         )
@@ -1282,7 +1342,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
                                                 OutlinedButton(
-                                                    onClick = { repository.setNightChargingSchedule(22, 0, 7, 0) },
+                                                    onClick = {
+                                                        haptics.tap()
+                                                        repository.setNightChargingSchedule(22, 0, 7, 0)
+                                                    },
                                                     shape = RoundedCornerShape(8.dp),
                                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                                                     modifier = Modifier.weight(1f)
@@ -1290,7 +1353,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                                     Text("10 PM - 7 AM", fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
                                                 }
                                                 OutlinedButton(
-                                                    onClick = { repository.setNightChargingSchedule(23, 0, 6, 0) },
+                                                    onClick = {
+                                                        haptics.tap()
+                                                        repository.setNightChargingSchedule(23, 0, 6, 0)
+                                                    },
                                                     shape = RoundedCornerShape(8.dp),
                                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                                                     modifier = Modifier.weight(1f)
@@ -1298,7 +1364,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                                     Text("11 PM - 6 AM", fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
                                                 }
                                                 OutlinedButton(
-                                                    onClick = { repository.setNightChargingSchedule(0, 0, 8, 0) },
+                                                    onClick = {
+                                                        haptics.tap()
+                                                        repository.setNightChargingSchedule(0, 0, 8, 0)
+                                                    },
                                                     shape = RoundedCornerShape(8.dp),
                                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                                                     modifier = Modifier.weight(1f)
@@ -1324,7 +1393,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                                     }
                                                     Slider(
                                                         value = night.startHour.toFloat(),
-                                                        onValueChange = { repository.setNightChargingSchedule(it.toInt(), night.startMinute, night.endHour, night.endMinute) },
+                                                        onValueChange = {
+                                                            haptics.sliderTick()
+                                                            repository.setNightChargingSchedule(it.toInt(), night.startMinute, night.endHour, night.endMinute)
+                                                        },
                                                         valueRange = 0f..23f,
                                                         steps = 22
                                                     )
@@ -1339,7 +1411,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                                     }
                                                     Slider(
                                                         value = night.endHour.toFloat(),
-                                                        onValueChange = { repository.setNightChargingSchedule(night.startHour, night.startMinute, it.toInt(), night.endMinute) },
+                                                        onValueChange = {
+                                                            haptics.sliderTick()
+                                                            repository.setNightChargingSchedule(night.startHour, night.startMinute, it.toInt(), night.endMinute)
+                                                        },
                                                         valueRange = 0f..23f,
                                                         steps = 22
                                                     )
@@ -1361,7 +1436,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                 }
                                 Slider(
                                     value = night.targetLimitPercent.toFloat(),
-                                    onValueChange = { repository.setNightChargingTarget(it.toInt()) },
+                                    onValueChange = {
+                                        haptics.sliderTick()
+                                        repository.setNightChargingTarget(it.toInt())
+                                    },
                                     valueRange = 70f..95f,
                                     steps = 4
                                 )
@@ -1377,6 +1455,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                 Slider(
                                     value = night.trickleCurrentMa.toFloat(),
                                     onValueChange = { raw ->
+                                        haptics.sliderTick()
                                         val snapped = ((raw.toInt() + 125) / 250 * 250).coerceIn(500, 2500)
                                         repository.setNightTrickleCurrent(snapped)
                                     },
@@ -1394,7 +1473,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                 }
                                 Slider(
                                     value = night.maxThermalCeilingC.coerceIn(30f, 40f),
-                                    onValueChange = { repository.setNightThermalCeiling(it) },
+                                    onValueChange = {
+                                        haptics.sliderTick()
+                                        repository.setNightThermalCeiling(it)
+                                    },
                                     valueRange = 30f..40f,
                                     steps = 9
                                 )
@@ -1413,7 +1495,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                     }
                                     Switch(
                                         checked = night.autoBypassAtTarget,
-                                        onCheckedChange = { repository.toggleNightAutoBypass(it) }
+                                        onCheckedChange = {
+                                            haptics.toggle(it)
+                                            repository.toggleNightAutoBypass(it)
+                                        }
                                     )
                                 }
 
@@ -1430,7 +1515,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                     }
                                     Switch(
                                         checked = night.finishTopUpBeforeWakeup,
-                                        onCheckedChange = { repository.toggleNightTopUp(it) }
+                                        onCheckedChange = {
+                                            haptics.toggle(it)
+                                            repository.toggleNightTopUp(it)
+                                        }
                                     )
                                 }
 
@@ -1447,7 +1535,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                     }
                                     Switch(
                                         checked = night.muteChargingLed,
-                                        onCheckedChange = { repository.toggleNightLedMute(it) }
+                                        onCheckedChange = {
+                                            haptics.toggle(it)
+                                            repository.toggleNightLedMute(it)
+                                        }
                                     )
                                 }
                             }
@@ -1486,6 +1577,7 @@ fun BatteryScreen(repository: KernelRepository) {
                             Switch(
                                 checked = chargingControls.manualCurrentLimiterEnabled,
                                 onCheckedChange = { enabled ->
+                                    haptics.toggle(enabled)
                                     repository.setManualCurrentLimiter(enabled, sliderLimitMa.toInt())
                                 }
                             )
@@ -1571,6 +1663,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                 ) {
                                     OutlinedButton(
                                         onClick = {
+                                            haptics.tap()
                                             val stepped = (activeSliderMa - 500).coerceIn(1000, 20000)
                                             sliderLimitMa = stepped.toFloat()
                                             repository.setManualCurrentLimiter(true, stepped)
@@ -1586,11 +1679,13 @@ fun BatteryScreen(repository: KernelRepository) {
                                     Slider(
                                         value = sliderLimitMa,
                                         onValueChange = { raw ->
+                                            haptics.sliderTick()
                                             val snapped = ((raw.toInt() + 250) / 500 * 500).coerceIn(1000, 20000)
                                             sliderLimitMa = snapped.toFloat()
                                             repository.setManualCurrentLimiter(true, snapped)
                                         },
                                         onValueChangeFinished = {
+                                            haptics.confirm()
                                             val finalMa = ((sliderLimitMa.toInt() + 250) / 500 * 500).coerceIn(1000, 20000)
                                             repository.setManualCurrentLimiter(true, finalMa)
                                         },
@@ -1601,6 +1696,7 @@ fun BatteryScreen(repository: KernelRepository) {
 
                                     OutlinedButton(
                                         onClick = {
+                                            haptics.tap()
                                             val stepped = (activeSliderMa + 500).coerceIn(1000, 20000)
                                             sliderLimitMa = stepped.toFloat()
                                             repository.setManualCurrentLimiter(true, stepped)
@@ -1627,6 +1723,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                         FilterChip(
                                             selected = isTargetSelected,
                                             onClick = {
+                                                haptics.tap()
                                                 sliderLimitMa = targetMa.toFloat()
                                                 repository.setManualCurrentLimiter(true, targetMa)
                                             },
@@ -1688,6 +1785,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                             Switch(
                                                 checked = chargingControls.customTempLimitEnabled,
                                                 onCheckedChange = { isChecked ->
+                                                    haptics.toggle(isChecked)
                                                     repository.updateCustomLimiterTempConfig(tempLimitEnabled = isChecked)
                                                 }
                                             )
@@ -1708,7 +1806,10 @@ fun BatteryScreen(repository: KernelRepository) {
                                                         }
                                                         FilterChip(
                                                             selected = chargingControls.customTempThermalMode == mode,
-                                                            onClick = { repository.updateCustomLimiterTempConfig(thermalMode = mode) },
+                                                            onClick = {
+                                                                haptics.tap()
+                                                                repository.updateCustomLimiterTempConfig(thermalMode = mode)
+                                                            },
                                                             label = {
                                                                 Text(
                                                                     text = shortLabel,
@@ -1751,6 +1852,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                                         Slider(
                                                             value = chargingControls.customTempLimitC,
                                                             onValueChange = { newTemp ->
+                                                                haptics.sliderTick()
                                                                 repository.updateCustomLimiterTempConfig(tempLimitC = newTemp)
                                                             },
                                                             valueRange = 32f..48f,
@@ -1775,6 +1877,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                                         Slider(
                                                             value = chargingControls.customTempCooldownDeltaC,
                                                             onValueChange = { newCooldown ->
+                                                                haptics.sliderTick()
                                                                 repository.updateCustomLimiterTempConfig(cooldownDeltaC = newCooldown)
                                                             },
                                                             valueRange = 1.0f..4.0f,
@@ -1800,6 +1903,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                                     Slider(
                                                         value = chargingControls.customTempFallbackCurrentMa.coerceIn(1000, 18000).toFloat(),
                                                         onValueChange = { newFallback ->
+                                                            haptics.sliderTick()
                                                             val snappedFallback = ((newFallback.toInt() + 250) / 500 * 500).coerceIn(1000, 18000)
                                                             repository.updateCustomLimiterTempConfig(fallbackCurrentMa = snappedFallback)
                                                         },
@@ -1847,7 +1951,10 @@ fun BatteryScreen(repository: KernelRepository) {
                             }
                             Switch(
                                 checked = chargingControls.bypassThermalLimit,
-                                onCheckedChange = { repository.toggleBypassThermalLimit(it) }
+                                onCheckedChange = {
+                                    haptics.toggle(it)
+                                    repository.toggleBypassThermalLimit(it)
+                                }
                             )
                         }
 
@@ -1866,6 +1973,7 @@ fun BatteryScreen(repository: KernelRepository) {
                             Switch(
                                 checked = chargingControls.lockSysfsNodesReadOnly,
                                 onCheckedChange = { isChecked ->
+                                    haptics.toggle(isChecked)
                                     repository.updateCurrentLimiterProtectionFlags(
                                         lockReadOnly = isChecked,
                                         overrideThermalDaemon = chargingControls.overrideRomThermalDaemon,
@@ -1890,6 +1998,7 @@ fun BatteryScreen(repository: KernelRepository) {
                             Switch(
                                 checked = chargingControls.overrideRomThermalDaemon,
                                 onCheckedChange = { isChecked ->
+                                    haptics.toggle(isChecked)
                                     repository.updateCurrentLimiterProtectionFlags(
                                         lockReadOnly = chargingControls.lockSysfsNodesReadOnly,
                                         overrideThermalDaemon = isChecked,
@@ -1914,6 +2023,7 @@ fun BatteryScreen(repository: KernelRepository) {
                             Switch(
                                 checked = chargingControls.forcePmicVoterOverride,
                                 onCheckedChange = { isChecked ->
+                                    haptics.toggle(isChecked)
                                     repository.updateCurrentLimiterProtectionFlags(
                                         lockReadOnly = chargingControls.lockSysfsNodesReadOnly,
                                         overrideThermalDaemon = chargingControls.overrideRomThermalDaemon,

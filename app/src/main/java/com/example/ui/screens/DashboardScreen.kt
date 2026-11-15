@@ -1,10 +1,16 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.repository.KernelRepository
 import com.example.service.DragonMonitorService
+import com.example.ui.haptics.LocalDragonHaptics
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.ElectricViolet
@@ -56,6 +63,7 @@ fun DashboardScreen(
     val activeCustomProfile by repository.activeCustomProfileFlow.collectAsState()
     val perAppConfig by repository.perAppProfileConfigFlow.collectAsState()
     val themeCustomization = LocalThemeCustomization.current
+    val haptics = LocalDragonHaptics.current
 
     val primaryColor = MaterialTheme.colorScheme.primary
     val secondaryColor = MaterialTheme.colorScheme.secondary
@@ -151,6 +159,7 @@ fun DashboardScreen(
 
                         IconButton(
                             onClick = {
+                                haptics.confirm()
                                 repository.checkRoot()
                                 repository.grantRootAndRefreshBatteryHealth()
                                 repository.grantRootAndRefreshRamInfo()
@@ -218,7 +227,10 @@ fun DashboardScreen(
                             }
                         }
                         FilledTonalButton(
-                            onClick = { onNavigateToTab(1) },
+                            onClick = {
+                                haptics.tap()
+                                onNavigateToTab(1)
+                            },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.height(32.dp)
@@ -243,7 +255,10 @@ fun DashboardScreen(
                             val selected = activeCustomProfile == null && activeProfile == prof
                             FilterChip(
                                 selected = selected,
-                                onClick = { repository.setBatteryProfile(prof) },
+                                onClick = {
+                                    haptics.heavyAction()
+                                    repository.setBatteryProfile(prof)
+                                },
                                 label = {
                                     Text(
                                         text = prof.title,
@@ -264,7 +279,10 @@ fun DashboardScreen(
                             val selected = activeCustomProfile == null && activeProfile == prof
                             FilterChip(
                                 selected = selected,
-                                onClick = { repository.setBatteryProfile(prof) },
+                                onClick = {
+                                    haptics.heavyAction()
+                                    repository.setBatteryProfile(prof)
+                                },
                                 label = {
                                     Text(
                                         text = prof.title,
@@ -322,7 +340,10 @@ fun DashboardScreen(
                         accentColor = if (currentFps >= 90) SuccessGreen else NeonCyan,
                         progress = (currentFps / 120f).coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(2) }
+                        onClick = {
+                            haptics.tap()
+                            onNavigateToTab(2)
+                        }
                     )
                     TelemetryMiniCard(
                         title = "CPU THERMALS",
@@ -332,7 +353,10 @@ fun DashboardScreen(
                         accentColor = if (cpuTemp > 65f) DangerRed else primaryColor,
                         progress = (cpuLoad / 100f).coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(0) }
+                        onClick = {
+                            haptics.tap()
+                            onNavigateToTab(0)
+                        }
                     )
                 }
 
@@ -351,7 +375,10 @@ fun DashboardScreen(
                         accentColor = NeonCyan,
                         progress = (gpuConfig.curFreqMhz.toFloat() / gpuConfig.maxFreqMhz.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(2) }
+                        onClick = {
+                            haptics.tap()
+                            onNavigateToTab(2)
+                        }
                     )
                     val ramRatio = vramConfig.usedRamMb.toFloat() / vramConfig.totalRamMb.coerceAtLeast(1).toFloat()
                     TelemetryMiniCard(
@@ -362,7 +389,10 @@ fun DashboardScreen(
                         accentColor = ElectricViolet,
                         progress = ramRatio.coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(2) }
+                        onClick = {
+                            haptics.tap()
+                            onNavigateToTab(2)
+                        }
                     )
                 }
 
@@ -381,7 +411,10 @@ fun DashboardScreen(
                         accentColor = if (battery.temperatureC > 42f) WarningOrange else SuccessGreen,
                         progress = (battery.levelPercent / 100f).coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(1) }
+                        onClick = {
+                            haptics.tap()
+                            onNavigateToTab(1)
+                        }
                     )
                     TelemetryMiniCard(
                         title = if (battery.isCharging) "LIVE CHARGE SPEED" else "DISCHARGE RATE",
@@ -391,7 +424,10 @@ fun DashboardScreen(
                         accentColor = if (battery.isCharging) SuccessGreen else AmberGold,
                         progress = if (battery.isCharging) (battery.chargeSpeedWatts / 90f).coerceIn(0.08f, 1f) else (battery.dischargeRateMa / 2500f).coerceIn(0.08f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(1) }
+                        onClick = {
+                            haptics.tap()
+                            onNavigateToTab(1)
+                        }
                     )
                 }
             }
@@ -531,7 +567,10 @@ fun DashboardScreen(
                             }
                         }
                         FilledTonalButton(
-                            onClick = { onNavigateToTab(1) },
+                            onClick = {
+                                haptics.tap()
+                                onNavigateToTab(1)
+                            },
                             modifier = Modifier.height(26.dp),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
@@ -556,11 +595,13 @@ fun DashboardScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Compact Live Notification Telemetry Readout
+                    // Compact & Expandable Dragon Turbo Notification Deck
                     val activeHudStyle = themeConfig.notificationPanelStyle
                     val hudShape = RoundedCornerShape(
                         if (activeHudStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 14.dp else 10.dp
                     )
+                    var isTurboDeckExpanded by remember { mutableStateOf(false) }
+                    val deckProfileLabel = (activeCustomProfile?.title ?: activeProfile.title)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -595,93 +636,216 @@ fun DashboardScreen(
                                 },
                                 shape = hudShape
                             )
-                            .padding(horizontal = 9.dp, vertical = 6.dp)
+                            .clickable {
+                                val next = !isTurboDeckExpanded
+                                haptics.toggle(next)
+                                isTurboDeckExpanded = next
+                            }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
                             .testTag("notification_hud_live_card")
                     ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            // Compact Always-Visible Header Strip
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .defaultMinSize(minHeight = 40.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = String.format(
-                                        Locale.US,
-                                        "%d%% • %d mA (%.1fW) • %.0f°C",
-                                        battery.levelPercent,
-                                        kotlin.math.abs(battery.currentMa),
-                                        battery.livePowerWatts,
-                                        battery.temperatureC
-                                    ),
-                                    fontSize = 10.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (activeHudStyle == com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW) primaryColor else MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = String.format(
-                                        Locale.US,
-                                        "Act Drain: %.1f%% (%.1f%%/h) • Idle Drain: %.1f%% (%.1f%%/h)",
-                                        battery.screenOnDrainPercent,
-                                        battery.activeDrainPerHour,
-                                        battery.screenOffDrainPercent,
-                                        battery.idleDrainPerHour
-                                    ),
-                                    fontSize = 9.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
-                                )
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "⚡ DRAGON TURBO DECK",
+                                            fontSize = 9.5.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = if (activeHudStyle == com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW) primaryColor else NeonCyan
+                                        )
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = secondaryColor.copy(alpha = 0.16f)
+                                        ) {
+                                            Text(
+                                                text = deckProfileLabel.uppercase(Locale.US),
+                                                fontSize = 8.5.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.Bold,
+                                                color = secondaryColor,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = String.format(
+                                            Locale.US,
+                                            "%d%% • %d mA (%.1fW) • %.0f°C • Act %.1f%%/h",
+                                            battery.levelPercent,
+                                            kotlin.math.abs(battery.currentMa),
+                                            battery.livePowerWatts,
+                                            battery.temperatureC,
+                                            battery.activeDrainPerHour
+                                        ),
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        val next = !isTurboDeckExpanded
+                                        haptics.toggle(next)
+                                        isTurboDeckExpanded = next
+                                    },
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .testTag("turbo_notification_deck_toggle")
+                                ) {
+                                    Icon(
+                                        imageVector = if (isTurboDeckExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                        contentDescription = if (isTurboDeckExpanded) "Collapse Dragon Turbo Notification Deck" else "Expand Dragon Turbo Notification Deck",
+                                        tint = primaryColor
+                                    )
+                                }
                             }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+
+                            // Expandable Detailed Notification Telemetry & Controls
+                            AnimatedVisibility(
+                                visible = isTurboDeckExpanded,
+                                enter = expandVertically(animationSpec = tween(180)) + fadeIn(animationSpec = tween(160)),
+                                exit = shrinkVertically(animationSpec = tween(150)) + fadeOut(animationSpec = tween(120))
                             ) {
-                                Text(
-                                    text = String.format(
-                                        Locale.US,
-                                        "Screen On: %s • %.1f%% (%d mAh)",
-                                        battery.screenOnTimeFormatted,
-                                        battery.screenOnDrainPercent,
-                                        battery.screenOnDrainMah
-                                    ),
-                                    fontSize = 9.5.sp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
-                                )
-                                Text(
-                                    text = String.format(
-                                        Locale.US,
-                                        "Screen Off: %s • %.1f%% (%d mAh)",
-                                        battery.screenOffTimeFormatted,
-                                        battery.screenOffDrainPercent,
-                                        battery.screenOffDrainMah
-                                    ),
-                                    fontSize = 9.5.sp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = String.format(
-                                        Locale.US,
-                                        "Deep sleep: %s • %.1f%%",
-                                        battery.deepSleepTimeFormatted,
-                                        battery.deepSleepPercent
-                                    ),
-                                    fontSize = 9.5.sp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
-                                )
-                                Text(
-                                    text = String.format(
-                                        Locale.US,
-                                        "Awake: %s • %.1f%%",
-                                        battery.awakeTimeFormatted,
-                                        battery.awakePercent
-                                    ),
-                                    fontSize = 9.5.sp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
-                                )
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = String.format(
+                                                Locale.US,
+                                                "Active: %.1f%%/h (%.1f%%)",
+                                                battery.activeDrainPerHour,
+                                                battery.screenOnDrainPercent
+                                            ),
+                                            fontSize = 9.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                                        )
+                                        Text(
+                                            text = String.format(
+                                                Locale.US,
+                                                "Idle: %.1f%%/h (%.1f%%)",
+                                                battery.idleDrainPerHour,
+                                                battery.screenOffDrainPercent
+                                            ),
+                                            fontSize = 9.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = String.format(
+                                                Locale.US,
+                                                "Screen On: %s • %.1f%% (%d mAh)",
+                                                battery.screenOnTimeFormatted,
+                                                battery.screenOnDrainPercent,
+                                                battery.screenOnDrainMah
+                                            ),
+                                            fontSize = 9.5.sp,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
+                                        )
+                                        Text(
+                                            text = String.format(
+                                                Locale.US,
+                                                "Screen Off: %s • %.1f%% (%d mAh)",
+                                                battery.screenOffTimeFormatted,
+                                                battery.screenOffDrainPercent,
+                                                battery.screenOffDrainMah
+                                            ),
+                                            fontSize = 9.5.sp,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = String.format(
+                                                Locale.US,
+                                                "Deep sleep: %s • %.1f%%",
+                                                battery.deepSleepTimeFormatted,
+                                                battery.deepSleepPercent
+                                            ),
+                                            fontSize = 9.5.sp,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                                        )
+                                        Text(
+                                            text = String.format(
+                                                Locale.US,
+                                                "Awake: %s • %.1f%%",
+                                                battery.awakeTimeFormatted,
+                                                battery.awakePercent
+                                            ),
+                                            fontSize = 9.5.sp,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                haptics.tap()
+                                                onNavigateToTab(1)
+                                            },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .heightIn(min = 38.dp),
+                                            shape = RoundedCornerShape(10.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Profiles", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                        FilledTonalButton(
+                                            onClick = {
+                                                haptics.confirm()
+                                                DragonMonitorService.startService(context)
+                                            },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .heightIn(min = 38.dp),
+                                            shape = RoundedCornerShape(10.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(Icons.Default.NotificationsActive, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Sync Shade", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -716,7 +880,10 @@ fun DashboardScreen(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         OutlinedButton(
-                            onClick = { repository.purgeVramAndCaches() },
+                            onClick = {
+                                haptics.heavyAction()
+                                repository.purgeVramAndCaches()
+                            },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)
@@ -732,7 +899,10 @@ fun DashboardScreen(
                         }
 
                         Button(
-                            onClick = { DragonMonitorService.startService(context) },
+                            onClick = {
+                                haptics.confirm()
+                                DragonMonitorService.startService(context)
+                            },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)

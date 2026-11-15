@@ -28,9 +28,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.GamingThemePreset
+import com.example.data.model.HapticIntensity
 import com.example.data.model.SurfaceThemeMode
 import com.example.data.model.ThemeCustomizationConfig
 import com.example.data.repository.KernelRepository
+import com.example.ui.haptics.LocalDragonHaptics
 import com.example.ui.theme.*
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -42,6 +44,7 @@ fun ThemeStudioSection(
 ) {
     val primaryColor = MaterialTheme.colorScheme.primary
     val secondaryColor = MaterialTheme.colorScheme.secondary
+    val haptics = LocalDragonHaptics.current
     val cardShape = RoundedCornerShape(themeConfig.cornerRadiusDp.dp)
     val glowAlpha = themeConfig.borderGlowIntensity.coerceIn(0.15f, 1.0f)
 
@@ -305,7 +308,10 @@ fun ThemeStudioSection(
                     Spacer(modifier = Modifier.width(6.dp))
                     Switch(
                         checked = isMaterial3Active,
-                        onCheckedChange = { enabled -> repository.toggleMaterial3Ui(enabled) },
+                        onCheckedChange = { enabled ->
+                            haptics.toggle(enabled)
+                            repository.toggleMaterial3Ui(enabled)
+                        },
                         modifier = Modifier.testTag("switch_material_3_theme")
                     )
                 }
@@ -520,6 +526,7 @@ fun ThemeStudioSection(
                         Switch(
                             checked = isLiquidGlassActive,
                             onCheckedChange = { enabled ->
+                                haptics.toggle(enabled)
                                 repository.toggleLiquidGlass(enabled)
                             },
                             colors = SwitchDefaults.colors(
@@ -610,6 +617,7 @@ fun ThemeStudioSection(
                                         shape = RoundedCornerShape(50)
                                     )
                                     .clickable {
+                                        haptics.tap()
                                         if (!isLiquidGlassActive) {
                                             repository.toggleLiquidGlass(true)
                                         }
@@ -767,7 +775,10 @@ fun ThemeStudioSection(
                                 color = if (isSelected) primaryColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
                                 shape = RoundedCornerShape(12.dp)
                             )
-                            .clickable { repository.setNotificationPanelStyle(style) },
+                            .clickable {
+                                haptics.tap()
+                                repository.setNotificationPanelStyle(style)
+                            },
                         colors = CardDefaults.cardColors(
                             containerColor = if (isSelected) primaryColor.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                         )
@@ -783,7 +794,10 @@ fun ThemeStudioSection(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     RadioButton(
                                         selected = isSelected,
-                                        onClick = { repository.setNotificationPanelStyle(style) },
+                                        onClick = {
+                                            haptics.tap()
+                                            repository.setNotificationPanelStyle(style)
+                                        },
                                         colors = RadioButtonDefaults.colors(selectedColor = primaryColor),
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -806,14 +820,28 @@ fun ThemeStudioSection(
                     }
                 }
 
-                // Interactive Live Notification Panel Preview
-                Text(
-                    text = "NOTIFICATION HUD LIVE PREVIEW",
-                    fontSize = 9.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = primaryColor
-                )
+                // Interactive Live Notification Panel Preview (Compact & Expandable)
+                var isPreviewExpanded by remember { mutableStateOf(false) }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "DRAGON TURBO NOTIFICATION DECK PREVIEW",
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = primaryColor
+                    )
+                    Text(
+                        text = if (isPreviewExpanded) "EXPANDED • TAP TO COLLAPSE" else "COMPACT • TAP TO EXPAND",
+                        fontSize = 8.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = secondaryColor
+                    )
+                }
 
                 val activeStyle = themeConfig.notificationPanelStyle
                 val previewRadiusDp = when (activeStyle) {
@@ -860,7 +888,11 @@ fun ThemeStudioSection(
                             },
                             shape = RoundedCornerShape(previewRadiusDp)
                         )
-                        .padding(if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 8.dp else 12.dp)
+                        .clickable {
+                            haptics.toggle(!isPreviewExpanded)
+                            isPreviewExpanded = !isPreviewExpanded
+                        }
+                        .padding(if (isPreviewExpanded) 12.dp else 8.dp)
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Row(
@@ -870,12 +902,12 @@ fun ThemeStudioSection(
                         ) {
                             Text(
                                 text = when (activeStyle) {
-                                    com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> "Dragon Tools • Material 3"
-                                    com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> "Dragon Tools Telemetry"
-                                    com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> "⚡ DRAGON CHROMA HUD"
-                                    com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> "❄️ LIQUID GLASS COMPACT"
+                                    com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> "Dragon Turbo Deck • M3"
+                                    com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> "Dragon Turbo Deck"
+                                    com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> "⚡ DRAGON TURBO DECK"
+                                    com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> "❄️ TURBO DECK // GLASS"
                                 },
-                                fontSize = if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 11.sp else 12.sp,
+                                fontSize = if (!isPreviewExpanded) 10.5.sp else 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = when (activeStyle) {
                                     com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> MaterialTheme.colorScheme.primary
@@ -885,7 +917,7 @@ fun ThemeStudioSection(
                                 }
                             )
                             Text(
-                                text = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) "AUTO • 120Hz" else "NOW • ACTIVE",
+                                text = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) "AUTO • 120Hz" else "PUBG • 120 FPS",
                                 fontSize = 8.sp,
                                 fontFamily = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) FontFamily.SansSerif else FontFamily.Monospace,
                                 color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) secondaryColor else MaterialTheme.colorScheme.onSurfaceVariant
@@ -893,84 +925,91 @@ fun ThemeStudioSection(
                         }
                         Text(
                             text = "78% • ⚡ +3420 mA (18.2 W) • 34°C",
-                            fontSize = if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 11.sp else 13.sp,
+                            fontSize = if (!isPreviewExpanded) 11.sp else 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                        Text(
-                            text = "Active: 8.2%/h • Screen On: 1h 22m • SOH: 98%",
-                            fontSize = if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 9.sp else 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        val btnShape = RoundedCornerShape(if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 14.dp else 8.dp)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Surface(
-                                modifier = Modifier.weight(1f),
-                                shape = btnShape,
-                                color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) {
-                                    MaterialTheme.colorScheme.secondaryContainer
-                                } else {
-                                    secondaryColor.copy(alpha = 0.16f)
-                                },
-                                border = androidx.compose.foundation.BorderStroke(
-                                    width = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 0.8.dp else 1.dp,
-                                    color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) {
-                                        MaterialTheme.colorScheme.outlineVariant
-                                    } else {
-                                        secondaryColor.copy(alpha = 0.65f)
-                                    }
-                                )
+                        if (isPreviewExpanded) {
+                            Text(
+                                text = "Active: 8.2%/h • Screen On: 1h 22m • SOH: 98%",
+                                fontSize = 10.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "Screen Off: 3h 14m • Deep sleep: 94.1% • Awake: 5.9%",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            val btnShape = RoundedCornerShape(if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 14.dp else 8.dp)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(
-                                    text = "⚡ PROFILE SWITCH",
-                                    fontSize = 9.sp,
-                                    fontFamily = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) FontFamily.SansSerif else FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    color = when (activeStyle) {
-                                        com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Color(0xFF38BDF8)
-                                        com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> MaterialTheme.colorScheme.onSecondaryContainer
-                                        else -> secondaryColor
-                                    },
-                                    modifier = Modifier.padding(vertical = 5.dp, horizontal = 8.dp),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            Surface(
-                                modifier = Modifier.weight(1f),
-                                shape = btnShape,
-                                color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) {
-                                    MaterialTheme.colorScheme.primaryContainer
-                                } else {
-                                    primaryColor.copy(alpha = 0.16f)
-                                },
-                                border = androidx.compose.foundation.BorderStroke(
-                                    width = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 0.8.dp else 1.dp,
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    shape = btnShape,
                                     color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) {
-                                        MaterialTheme.colorScheme.outlineVariant
+                                        MaterialTheme.colorScheme.secondaryContainer
                                     } else {
-                                        primaryColor.copy(alpha = 0.65f)
-                                    }
-                                )
-                            ) {
-                                Text(
-                                    text = "⏺ RECORD FPS",
-                                    fontSize = 9.sp,
-                                    fontFamily = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) FontFamily.SansSerif else FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    color = when (activeStyle) {
-                                        com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Color.White
-                                        com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> MaterialTheme.colorScheme.onPrimaryContainer
-                                        else -> primaryColor
+                                        secondaryColor.copy(alpha = 0.16f)
                                     },
-                                    modifier = Modifier.padding(vertical = 5.dp, horizontal = 8.dp),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        width = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 0.8.dp else 1.dp,
+                                        color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) {
+                                            MaterialTheme.colorScheme.outlineVariant
+                                        } else {
+                                            secondaryColor.copy(alpha = 0.65f)
+                                        }
+                                    )
+                                ) {
+                                    Text(
+                                        text = "⚡ PROFILE SWITCH",
+                                        fontSize = 9.sp,
+                                        fontFamily = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) FontFamily.SansSerif else FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = when (activeStyle) {
+                                            com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Color(0xFF38BDF8)
+                                            com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> MaterialTheme.colorScheme.onSecondaryContainer
+                                            else -> secondaryColor
+                                        },
+                                        modifier = Modifier.padding(vertical = 5.dp, horizontal = 8.dp),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    shape = btnShape,
+                                    color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        primaryColor.copy(alpha = 0.16f)
+                                    },
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        width = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) 0.8.dp else 1.dp,
+                                        color = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) {
+                                            MaterialTheme.colorScheme.outlineVariant
+                                        } else {
+                                            primaryColor.copy(alpha = 0.65f)
+                                        }
+                                    )
+                                ) {
+                                    Text(
+                                        text = "⏺ RECORD FPS",
+                                        fontSize = 9.sp,
+                                        fontFamily = if (activeStyle == com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI) FontFamily.SansSerif else FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = when (activeStyle) {
+                                            com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Color.White
+                                            com.example.data.model.NotificationPanelStyle.MATERIAL_3_UI -> MaterialTheme.colorScheme.onPrimaryContainer
+                                            else -> primaryColor
+                                        },
+                                        modifier = Modifier.padding(vertical = 5.dp, horizontal = 8.dp),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }
@@ -1039,7 +1078,10 @@ fun ThemeStudioSection(
                                             ),
                                             shape = RoundedCornerShape(14.dp)
                                         )
-                                        .clickable { repository.applyGamingThemePreset(preset) }
+                                        .clickable {
+                                            haptics.confirm()
+                                            repository.applyGamingThemePreset(preset)
+                                        }
                                         .padding(10.dp)
                                 ) {
                                     Column {
@@ -1168,7 +1210,10 @@ fun ThemeStudioSection(
                                             color = borderCol,
                                             shape = RoundedCornerShape(12.dp)
                                         )
-                                        .clickable { repository.setAccentColorIndex(actualIndex) }
+                                        .clickable {
+                                            haptics.tap()
+                                            repository.setAccentColorIndex(actualIndex)
+                                        }
                                         .padding(horizontal = 10.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
@@ -1273,7 +1318,10 @@ fun ThemeStudioSection(
                                     color = if (isSecSelected) option.color else Color.Transparent,
                                     shape = RoundedCornerShape(10.dp)
                                 )
-                                .clickable { repository.setSecondaryAccentIndex(idx) }
+                                .clickable {
+                                    haptics.tap()
+                                    repository.setSecondaryAccentIndex(idx)
+                                }
                                 .padding(horizontal = 9.dp, vertical = 6.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1359,7 +1407,10 @@ fun ThemeStudioSection(
                     }
                     Switch(
                         checked = themeConfig.useCustomPrimaryColor,
-                        onCheckedChange = { repository.toggleCustomPrimaryColor(it) }
+                        onCheckedChange = {
+                            haptics.toggle(it)
+                            repository.toggleCustomPrimaryColor(it)
+                        }
                     )
                 }
 
@@ -1400,6 +1451,7 @@ fun ThemeStudioSection(
                                             shape = RoundedCornerShape(9.dp)
                                         )
                                         .clickable {
+                                            haptics.tap()
                                             repository.updateCustomRgbColor(r, g, b)
                                         },
                                     contentAlignment = Alignment.Center
@@ -1464,7 +1516,10 @@ fun ThemeStudioSection(
 
                     if (!themeConfig.useCustomPrimaryColor) {
                         FilledTonalButton(
-                            onClick = { repository.toggleCustomPrimaryColor(true) },
+                            onClick = {
+                                haptics.confirm()
+                                repository.toggleCustomPrimaryColor(true)
+                            },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                             shape = RoundedCornerShape(8.dp)
                         ) {
@@ -1490,7 +1545,10 @@ fun ThemeStudioSection(
                         shape = RoundedCornerShape(10.dp)
                     )
                     Button(
-                        onClick = { repository.applyHexColorString(hexInputText) },
+                        onClick = {
+                            haptics.confirm()
+                            repository.applyHexColorString(hexInputText)
+                        },
                         shape = RoundedCornerShape(10.dp),
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
                     ) {
@@ -1557,6 +1615,7 @@ fun ThemeStudioSection(
                     )
                     Button(
                         onClick = {
+                            haptics.confirm()
                             repository.saveCustomColorPalette(customPaletteNameInput)
                             customPaletteNameInput = ""
                         },
@@ -1605,7 +1664,10 @@ fun ThemeStudioSection(
                                     ),
                                     shape = RoundedCornerShape(12.dp)
                                 )
-                                .clickable { repository.applyCustomColorPalette(pal) }
+                                .clickable {
+                                    haptics.confirm()
+                                    repository.applyCustomColorPalette(pal)
+                                }
                                 .padding(horizontal = 10.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -1650,7 +1712,10 @@ fun ThemeStudioSection(
 
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 TextButton(
-                                    onClick = { repository.applyCustomColorPalette(pal) },
+                                    onClick = {
+                                        haptics.confirm()
+                                        repository.applyCustomColorPalette(pal)
+                                    },
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                 ) {
                                     Text(
@@ -1662,7 +1727,10 @@ fun ThemeStudioSection(
                                     )
                                 }
                                 IconButton(
-                                    onClick = { repository.deleteCustomColorPalette(pal.id) },
+                                    onClick = {
+                                        haptics.warning()
+                                        repository.deleteCustomColorPalette(pal.id)
+                                    },
                                     modifier = Modifier.size(28.dp)
                                 ) {
                                     Icon(
@@ -1743,7 +1811,10 @@ fun ThemeStudioSection(
                                     color = if (isSelected) primaryColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
                                     shape = RoundedCornerShape(12.dp)
                                 )
-                                .clickable { repository.setSurfaceThemeMode(mode) }
+                                .clickable {
+                                    haptics.tabSelect()
+                                    repository.setSurfaceThemeMode(mode)
+                                }
                                 .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -1800,7 +1871,10 @@ fun ThemeStudioSection(
 
                             RadioButton(
                                 selected = isSelected,
-                                onClick = { repository.setSurfaceThemeMode(mode) }
+                                onClick = {
+                                    haptics.tabSelect()
+                                    repository.setSurfaceThemeMode(mode)
+                                }
                             )
                         }
                     }
@@ -1847,7 +1921,10 @@ fun ThemeStudioSection(
                 }
                 Slider(
                     value = themeConfig.borderGlowIntensity,
-                    onValueChange = { repository.setBorderGlowIntensity(it) },
+                    onValueChange = {
+                        haptics.sliderTick()
+                        repository.setBorderGlowIntensity(it)
+                    },
                     valueRange = 0.15f..1.0f
                 )
 
@@ -1869,7 +1946,10 @@ fun ThemeStudioSection(
                 }
                 Slider(
                     value = themeConfig.headerGlowIntensity,
-                    onValueChange = { repository.setHeaderGlowIntensity(it) },
+                    onValueChange = {
+                        haptics.sliderTick()
+                        repository.setHeaderGlowIntensity(it)
+                    },
                     valueRange = 0.05f..0.50f
                 )
 
@@ -1904,7 +1984,10 @@ fun ThemeStudioSection(
                                     if (isSelected) primaryColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
                                     RoundedCornerShape(dpVal.coerceAtMost(14).dp)
                                 )
-                                .clickable { repository.setCornerRadiusDp(dpVal) }
+                                .clickable {
+                                    haptics.tap()
+                                    repository.setCornerRadiusDp(dpVal)
+                                }
                                 .padding(vertical = 8.dp),
                             contentAlignment = Alignment.Center
                         ) {
@@ -1939,7 +2022,10 @@ fun ThemeStudioSection(
                         }
                         Switch(
                             checked = themeConfig.useDynamicColor,
-                            onCheckedChange = { repository.toggleDynamicColor(it) }
+                            onCheckedChange = {
+                                haptics.toggle(it)
+                                repository.toggleDynamicColor(it)
+                            }
                         )
                     }
                 }
@@ -1947,13 +2033,173 @@ fun ThemeStudioSection(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 OutlinedButton(
-                    onClick = { repository.resetThemeDefaults() },
+                    onClick = {
+                        haptics.warning()
+                        repository.resetThemeDefaults()
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Reset to Default Material 3 Theme", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        // 7. TACTILE & HAPTIC FEEDBACK STUDIO
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("haptic_feedback_studio_card"),
+            shape = cardShape,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = CardDefaults.outlinedCardBorder()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Surface(
+                            modifier = Modifier.size(38.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            color = primaryColor.copy(alpha = 0.16f)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Vibration,
+                                    contentDescription = "Tactile Haptic Feedback",
+                                    tint = primaryColor,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "Tactile Haptic Feedback",
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (themeConfig.hapticFeedbackEnabled) {
+                                    "${themeConfig.hapticIntensity.title} profile • Tactile clicks, toggles & detents"
+                                } else {
+                                    "Muted • No tactile vibration on taps or switches"
+                                },
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = themeConfig.hapticFeedbackEnabled,
+                        onCheckedChange = { enabled ->
+                            repository.setHapticFeedbackEnabled(enabled)
+                            if (enabled) haptics.toggle(true)
+                        },
+                        modifier = Modifier.testTag("switch_haptic_feedback")
+                    )
+                }
+
+                // Intensity Profile Selector
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    HapticIntensity.entries.forEach { level ->
+                        val isSelected = themeConfig.hapticIntensity == level && themeConfig.hapticFeedbackEnabled
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSelected) primaryColor.copy(alpha = 0.20f)
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            border = androidx.compose.foundation.BorderStroke(
+                                width = if (isSelected) 1.4.dp else 1.dp,
+                                color = if (isSelected) primaryColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    repository.setHapticIntensity(level)
+                                    haptics.confirm()
+                                }
+                                .testTag("haptic_intensity_${level.name.lowercase(Locale.US)}")
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = level.title,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                    color = if (isSelected) primaryColor else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Live Tactile Test Strip
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { haptics.tap() },
+                        enabled = themeConfig.hapticFeedbackEnabled,
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                    ) {
+                        Text("Tap", fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = { haptics.toggle(true) },
+                        enabled = themeConfig.hapticFeedbackEnabled,
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                    ) {
+                        Text("Toggle", fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = { haptics.confirm() },
+                        enabled = themeConfig.hapticFeedbackEnabled,
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                    ) {
+                        Text("Confirm", fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = { haptics.heavyAction() },
+                        enabled = themeConfig.hapticFeedbackEnabled,
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                    ) {
+                        Text("Heavy", fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
@@ -2011,6 +2257,7 @@ private fun RgbChannelSlider(
     channelColor: Color,
     onValueChange: (Int) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -2033,7 +2280,10 @@ private fun RgbChannelSlider(
         }
         Slider(
             value = value.toFloat(),
-            onValueChange = { onValueChange(it.roundToInt()) },
+            onValueChange = {
+                haptics.sliderTick()
+                onValueChange(it.roundToInt())
+            },
             valueRange = 0f..255f,
             colors = SliderDefaults.colors(
                 thumbColor = channelColor,

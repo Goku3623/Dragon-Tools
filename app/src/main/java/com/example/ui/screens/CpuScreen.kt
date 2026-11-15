@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.testTag
 import com.example.data.model.AdrenoCpuBoostConfig
 import com.example.data.model.CpuCluster
 import com.example.data.repository.KernelRepository
+import com.example.ui.haptics.LocalDragonHaptics
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.NeonCyan
@@ -39,6 +40,7 @@ import com.example.ui.theme.WarningOrange
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CpuScreen(repository: KernelRepository) {
+    val haptics = LocalDragonHaptics.current
     val cpuClusters by repository.cpuClustersFlow.collectAsState()
     val coresStatus by repository.coresStatusFlow.collectAsState()
     val cpuTemp by repository.cpuTempFlow.collectAsState()
@@ -79,7 +81,10 @@ fun CpuScreen(repository: KernelRepository) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     FilledTonalButton(
-                        onClick = { repository.resetCpuToDefaults() },
+                        onClick = {
+                            haptics.warning()
+                            repository.resetCpuToDefaults()
+                        },
                         shape = RoundedCornerShape(50),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                         modifier = Modifier
@@ -204,6 +209,7 @@ fun CpuScreen(repository: KernelRepository) {
                                                 Switch(
                                                     checked = core.isOnline,
                                                     onCheckedChange = { online ->
+                                                        haptics.toggle(online)
                                                         repository.toggleCoreOnline(core.id, online)
                                                     },
                                                     modifier = Modifier.height(26.dp)
@@ -328,7 +334,10 @@ fun CpuScreen(repository: KernelRepository) {
                     )
                     Spacer(modifier = Modifier.height(14.dp))
                     OutlinedButton(
-                        onClick = { repository.resetCpuToDefaults() },
+                        onClick = {
+                            haptics.warning()
+                            repository.resetCpuToDefaults()
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("btn_reset_cpu_defaults"),
@@ -358,6 +367,7 @@ fun AdrenoCpuBoostCard(
     config: AdrenoCpuBoostConfig,
     onUpdate: (AdrenoCpuBoostConfig) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
@@ -384,7 +394,10 @@ fun AdrenoCpuBoostCard(
                 }
                 Switch(
                     checked = config.isEnabled,
-                    onCheckedChange = { onUpdate(config.copy(isEnabled = it)) }
+                    onCheckedChange = {
+                        haptics.toggle(it)
+                        onUpdate(config.copy(isEnabled = it))
+                    }
                 )
             }
 
@@ -421,7 +434,10 @@ fun AdrenoCpuBoostCard(
                         }
                         Switch(
                             checked = config.inputBoostEnabled,
-                            onCheckedChange = { onUpdate(config.copy(inputBoostEnabled = it)) }
+                            onCheckedChange = {
+                                haptics.toggle(it)
+                                onUpdate(config.copy(inputBoostEnabled = it))
+                            }
                         )
                     }
 
@@ -443,8 +459,12 @@ fun AdrenoCpuBoostCard(
                     }
                     Slider(
                         value = gpuThresholdSlider,
-                        onValueChange = { gpuThresholdSlider = it },
+                        onValueChange = {
+                            haptics.sliderTick()
+                            gpuThresholdSlider = it
+                        },
                         onValueChangeFinished = {
+                            haptics.confirm()
                             onUpdate(config.copy(gpuLoadThresholdPercent = gpuThresholdSlider.toInt()))
                         },
                         valueRange = 30f..90f,
@@ -467,8 +487,12 @@ fun AdrenoCpuBoostCard(
                     }
                     Slider(
                         value = boostDurationSlider,
-                        onValueChange = { boostDurationSlider = it },
+                        onValueChange = {
+                            haptics.sliderTick()
+                            boostDurationSlider = it
+                        },
                         onValueChangeFinished = {
+                            haptics.confirm()
                             onUpdate(config.copy(boostDurationMs = boostDurationSlider.toInt()))
                         },
                         valueRange = 20f..250f,
@@ -492,7 +516,10 @@ fun AdrenoCpuBoostCard(
                         listOf(1228800, 1497600, 1651200, 1843200).forEach { freqKhz ->
                             val selected = config.boostFreqSilverKhz == freqKhz
                             Button(
-                                onClick = { onUpdate(config.copy(boostFreqSilverKhz = freqKhz)) },
+                                onClick = {
+                                    haptics.tap()
+                                    onUpdate(config.copy(boostFreqSilverKhz = freqKhz))
+                                },
                                 modifier = Modifier
                                     .weight(1f)
                                     .defaultMinSize(minHeight = 34.dp),
@@ -528,7 +555,10 @@ fun AdrenoCpuBoostCard(
                         listOf(1555200, 1958400, 2150400, 2496000).forEach { freqKhz ->
                             val selected = config.boostFreqGoldKhz == freqKhz
                             Button(
-                                onClick = { onUpdate(config.copy(boostFreqGoldKhz = freqKhz)) },
+                                onClick = {
+                                    haptics.tap()
+                                    onUpdate(config.copy(boostFreqGoldKhz = freqKhz))
+                                },
                                 modifier = Modifier
                                     .weight(1f)
                                     .defaultMinSize(minHeight = 34.dp),
@@ -561,6 +591,7 @@ fun ClusterTuningCard(
     onUpdateFreq: (Int, Int) -> Unit,
     onUpdateUndervolt: (Int) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var expandedGovDropdown by remember { mutableStateOf(false) }
 
     Card(
@@ -617,7 +648,10 @@ fun ClusterTuningCard(
 
                 Box {
                     OutlinedButton(
-                        onClick = { expandedGovDropdown = true },
+                        onClick = {
+                            haptics.tap()
+                            expandedGovDropdown = true
+                        },
                         shape = RoundedCornerShape(10.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                         modifier = Modifier.defaultMinSize(minHeight = 36.dp)
@@ -635,6 +669,7 @@ fun ClusterTuningCard(
                             DropdownMenuItem(
                                 text = { Text(gov, fontWeight = if (gov == cluster.governor) FontWeight.Bold else FontWeight.Normal) },
                                 onClick = {
+                                    haptics.confirm()
                                     onUpdateGovernor(gov)
                                     expandedGovDropdown = false
                                 }
@@ -669,8 +704,12 @@ fun ClusterTuningCard(
 
             Slider(
                 value = maxIndexSlider,
-                onValueChange = { maxIndexSlider = it },
+                onValueChange = {
+                    haptics.sliderTick()
+                    maxIndexSlider = it
+                },
                 onValueChangeFinished = {
+                    haptics.confirm()
                     val chosenFreq = cluster.availableFrequencies[maxIndexSlider.toInt().coerceIn(0, cluster.availableFrequencies.size - 1)]
                     val minF = if (cluster.minFreqKhz > chosenFreq) chosenFreq else cluster.minFreqKhz
                     onUpdateFreq(minF, chosenFreq)
@@ -700,8 +739,12 @@ fun ClusterTuningCard(
 
             Slider(
                 value = minIndexSlider,
-                onValueChange = { minIndexSlider = it },
+                onValueChange = {
+                    haptics.sliderTick()
+                    minIndexSlider = it
+                },
                 onValueChangeFinished = {
+                    haptics.confirm()
                     val chosenFreq = cluster.availableFrequencies[minIndexSlider.toInt().coerceIn(0, cluster.availableFrequencies.size - 1)]
                     val maxF = if (cluster.maxFreqKhz < chosenFreq) chosenFreq else cluster.maxFreqKhz
                     onUpdateFreq(chosenFreq, maxF)
@@ -754,8 +797,14 @@ fun ClusterTuningCard(
 
             Slider(
                 value = undervoltSlider,
-                onValueChange = { undervoltSlider = it },
-                onValueChangeFinished = { onUpdateUndervolt(undervoltSlider.toInt()) },
+                onValueChange = {
+                    haptics.sliderTick()
+                    undervoltSlider = it
+                },
+                onValueChangeFinished = {
+                    haptics.confirm()
+                    onUpdateUndervolt(undervoltSlider.toInt())
+                },
                 valueRange = -100f..50f,
                 steps = 29 // 5mV steps
             )

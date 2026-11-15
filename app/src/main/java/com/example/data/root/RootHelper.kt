@@ -2015,8 +2015,16 @@ object RootHelper {
         val uclampFgMinLegacy = (uclampFgMinPct * 1024) / 100
         val uclampMaxLegacy = (uclampMaxPct * 1024) / 100
 
+        val isIndiaNoLimits = (thermalTableMode == "INDIA_NOLIMITS") || (thermalTableMode == "STANDARD" && (profileMode == "GAMING" || isUncapped))
+        val isIndiaTgame = (thermalTableMode == "INDIA_TGAME")
+        val effBusMode = when (busScaleMode) {
+            "DYNAMIC", "RESPONSIVE_75", "HIGH_90" -> busScaleMode
+            else -> if (isIndiaNoLimits) "HIGH_90" else if (isGamingOrPerf || isIndiaTgame) "RESPONSIVE_75" else "DYNAMIC"
+        }
+        val isGamingTuned = isIndiaNoLimits || (isGamingOrPerf && customLatencySensitive == true && effBusMode == "HIGH_90")
+
         val stuneBoost = when {
-            profileMode == "GAMING" || isUncapped -> 35
+            profileMode == "GAMING" || isUncapped || isGamingTuned -> 35
             profileMode == "PERFORMANCE" || isGamingOrPerf -> 20
             profileMode == "AUTO" -> 8
             else -> 0
@@ -2029,7 +2037,7 @@ object RootHelper {
             else -> 1
         }
         val baileysProfileVal = when {
-            profileMode == "GAMING" || isUncapped -> "gaming"
+            profileMode == "GAMING" || isUncapped || isGamingTuned -> "gaming"
             profileMode == "PERFORMANCE" || isGamingOrPerf -> "performance"
             isPowerSaving -> "powersave"
             else -> "balance"
@@ -2037,7 +2045,7 @@ object RootHelper {
         // On POCO F6 (Xiaomi/AOSP thermal_message), sconfig=10 selects Evaluation/High-Ceiling thermal table
         // instead of sconfig=0 (Normal stock table with aggressive ~37-39C throttling that drops clocks before profile limits).
         val sconfigVal = when {
-            profileMode == "GAMING" || isUncapped -> 10
+            profileMode == "GAMING" || isUncapped || isGamingTuned -> 10
             profileMode == "PERFORMANCE" || isGamingOrPerf -> 10
             suppressPrematureRomThrottle -> 10
             else -> 0
@@ -2055,10 +2063,9 @@ object RootHelper {
         val effBoostGold = if (cpuBoostEnabled) cpuBoostGoldKhz else 0
         val effBoostPrime = if (cpuBoostEnabled) cpuBoostPrimeKhz.coerceAtMost(primeMaxKhz) else 0
         val effBoostMs = if (inputBoostEnabled) cpuBoostDurationMs else 0
-        val isIndiaNoLimits = (thermalTableMode == "INDIA_NOLIMITS") || (thermalTableMode == "STANDARD" && (profileMode == "GAMING" || isUncapped))
-        val isIndiaTgame = (thermalTableMode == "INDIA_TGAME")
         val uncappedFlag = if (isUncapped) "true" else "false"
         val gamingFlag = if (isIndiaNoLimits) "true" else "false"
+        val gamingLatencyFlag = if (isGamingTuned) "true" else "false"
         val throttlelessFlag = if (isIndiaNoLimits) "true" else "false"
         val tgameFlag = if (isIndiaTgame) "true" else "false"
         val gamingOrPerfFlag = if (isGamingOrPerf || isIndiaNoLimits || isIndiaTgame) "true" else "false"
@@ -2075,10 +2082,6 @@ object RootHelper {
         val bgShedFlag = if (backgroundThermalShedding) "true" else "false"
         val effWaltDownRateUs = customWaltDownRateUs?.coerceIn(50000, 2000000) ?: -1
         val latencySensVal = if (customLatencySensitive ?: isIndiaNoLimits) 1 else 0
-        val effBusMode = when (busScaleMode) {
-            "DYNAMIC", "RESPONSIVE_75", "HIGH_90" -> busScaleMode
-            else -> if (isIndiaNoLimits) "HIGH_90" else if (isGamingOrPerf || isIndiaTgame) "RESPONSIVE_75" else "DYNAMIC"
-        }
 
         val script = """
             # Kill any previous background enforcer BEFORE writing new clocks so it cannot race with old config
@@ -3015,14 +3018,14 @@ EOF_TG_CONF
                         chmod 0444 "${'$'}iso_cs" 2>/dev/null || true
                     fi
                 done
-                if [ "$gamingFlag" = "true" ] || [ "$tgameFlag" = "true" ]; then
+                if [ "$gamingLatencyFlag" = "true" ] || [ "$tgameFlag" = "true" ]; then
                     for blk in /sys/block/sd* /sys/block/mmcblk*; do
                         [ -d "${'$'}blk/queue" ] || continue
                         [ -e "${'$'}blk/queue/read_ahead_kb" ] && echo 512 > "${'$'}blk/queue/read_ahead_kb" 2>/dev/null || true
                         [ -e "${'$'}blk/queue/iostats" ] && echo 0 > "${'$'}blk/queue/iostats" 2>/dev/null || true
                         [ -e "${'$'}blk/queue/nomerges" ] && echo 2 > "${'$'}blk/queue/nomerges" 2>/dev/null || true
                         [ -e "${'$'}blk/queue/nr_requests" ] && echo 256 > "${'$'}blk/queue/nr_requests" 2>/dev/null || true
-                        if [ "$gamingFlag" = "true" ]; then
+                        if [ "$gamingLatencyFlag" = "true" ]; then
                             [ -e "${'$'}blk/queue/add_random" ] && echo 0 > "${'$'}blk/queue/add_random" 2>/dev/null || true
                             [ -e "${'$'}blk/queue/rq_affinity" ] && echo 2 > "${'$'}blk/queue/rq_affinity" 2>/dev/null || true
                         else
@@ -3030,6 +3033,14 @@ EOF_TG_CONF
                             [ -e "${'$'}blk/queue/rq_affinity" ] && echo 1 > "${'$'}blk/queue/rq_affinity" 2>/dev/null || true
                         fi
                     done
+                    is_unthrottled_gaming=0
+                    if [ "$gamingLatencyFlag" = "true" ]; then
+                        if [ "$throttlelessFlag" = "true" ]; then
+                            [ "${'$'}nl_cpu3_lvl" -eq 0 ] 2>/dev/null && is_unthrottled_gaming=1
+                        else
+                            [ "${'$'}therm_stage" -eq 0 ] 2>/dev/null && is_unthrottled_gaming=1
+                        fi
+                    fi
                     for ufs_node in \
                         /sys/devices/platform/soc/*.ufshc/clkscale_enable \
                         /sys/devices/platform/soc/*.ufshc/clkgate_enable \
@@ -3038,7 +3049,7 @@ EOF_TG_CONF
                         /sys/class/scsi_host/*/clkgate_enable \
                         /sys/class/scsi_host/*/hibern8_on_idle_enable; do
                         if [ -e "${'$'}ufs_node" ]; then
-                            if [ "$gamingFlag" = "true" ] && [ "${'$'}nl_cpu3_lvl" -eq 0 ] 2>/dev/null; then
+                            if [ "${'$'}is_unthrottled_gaming" -eq 1 ] 2>/dev/null; then
                                 echo 0 > "${'$'}ufs_node" 2>/dev/null || true
                             else
                                 echo 1 > "${'$'}ufs_node" 2>/dev/null || true
@@ -3059,10 +3070,14 @@ EOF_TG_CONF
                         [ -e "${'$'}ufs_node" ] && echo 1 > "${'$'}ufs_node" 2>/dev/null || true
                     done
                 fi
-                if [ "$gamingFlag" = "true" ]; then
-                    # Disable deep power-collapse C-states (>150us wakeup latency) below 54C to eliminate frame wake jitter, keeping shallow WFI/retention
+                if [ "$gamingLatencyFlag" = "true" ]; then
+                    # Disable deep power-collapse C-states (>150us wakeup latency) while unthrottled to eliminate frame wake jitter, keeping shallow WFI/retention
                     tgt_cdis=0
-                    [ "${'$'}nl_cpu3_lvl" -eq 0 ] 2>/dev/null && tgt_cdis=1
+                    if [ "$throttlelessFlag" = "true" ]; then
+                        [ "${'$'}nl_cpu3_lvl" -eq 0 ] 2>/dev/null && tgt_cdis=1
+                    else
+                        [ "${'$'}therm_stage" -eq 0 ] 2>/dev/null && tgt_cdis=1
+                    fi
                     for c_idle in /sys/devices/system/cpu/cpu*/cpuidle/state*; do
                         [ -f "${'$'}c_idle/disable" ] && [ -f "${'$'}c_idle/latency" ] || continue
                         c_lat=${'$'}(cat "${'$'}c_idle/latency" 2>/dev/null | tr -dc '0-9')
@@ -3207,9 +3222,13 @@ EOF_TG_CONF
                     cmd power set-mode 0 2>/dev/null || true
                     cmd power set-fixed-performance-mode-enabled $fixedPerfFlag 2>/dev/null || true
                 fi
-                if [ "$gamingFlag" = "true" ]; then
+                if [ "$gamingLatencyFlag" = "true" ]; then
+                    setprop persist.sys.game.fps 120 2>/dev/null || true
                     setprop debug.hwui.use_hint_manager true 2>/dev/null || true
                     setprop vendor.perf.gestureflingboost.enable true 2>/dev/null || true
+                    setprop debug.sf.latch_unsignaled 0 2>/dev/null || true
+                    setprop debug.sf.auto_latch_unsignaled 0 2>/dev/null || true
+                    setprop debug.sf.set_idle_timer_ms 0 2>/dev/null || true
                     setprop debug.sf.set_touch_timer_ms 2000 2>/dev/null || true
                     am stopservice com.xiaomi.joyose/.JoyoseService 2>/dev/null || true
                 else
@@ -3460,7 +3479,7 @@ EOF_TG_CONF
                         hs_f="${'$'}boost_khz"
                         if [ -z "${'$'}hs_f" ] || [ "${'$'}hs_f" -le 0 ] 2>/dev/null; then hs_f="${'$'}max_f"; fi
                         if [ "${'$'}hs_f" -gt "${'$'}max_f" ] 2>/dev/null; then hs_f="${'$'}max_f"; fi
-                        if [ "$gamingFlag" = "true" ]; then
+                        if [ "$gamingLatencyFlag" = "true" ]; then
                             echo "${'$'}max_f" > "${'$'}gdir/hispeed_freq" 2>/dev/null || true
                             echo 5 > "${'$'}gdir/hispeed_load" 2>/dev/null || true
                             echo 0 > "${'$'}gdir/up_rate_limit_us" 2>/dev/null || true
@@ -3600,7 +3619,7 @@ EOF_TG_CONF
                 chown root:root /proc/sys/walt/sched_boost /proc/sys/walt/sched_conservative_pl /proc/sys/walt/sched_upmigrate /proc/sys/walt/sched_downmigrate /proc/sys/walt/sched_group_upmigrate /proc/sys/walt/sched_group_downmigrate /proc/sys/walt/sched_busy_hyst_ns /proc/sys/walt/sched_min_task_util_for_boost /proc/sys/walt/sched_min_task_util_for_colocation /proc/sys/walt/input_boost/input_boost_freq /proc/sys/walt/input_boost/input_boost_ms 2>/dev/null || true
                 chmod 0666 /proc/sys/walt/sched_boost /proc/sys/walt/sched_conservative_pl /proc/sys/walt/sched_upmigrate /proc/sys/walt/sched_downmigrate /proc/sys/walt/sched_group_upmigrate /proc/sys/walt/sched_group_downmigrate /proc/sys/walt/sched_busy_hyst_ns /proc/sys/walt/sched_min_task_util_for_boost /proc/sys/walt/sched_min_task_util_for_colocation /proc/sys/walt/input_boost/input_boost_freq /proc/sys/walt/input_boost/input_boost_ms 2>/dev/null || true
                 echo 0 > /proc/sys/walt/sched_boost 2>/dev/null || true
-                if [ "$gamingFlag" = "true" ]; then
+                if [ "$gamingLatencyFlag" = "true" ]; then
                     echo "55 70" > /proc/sys/walt/sched_upmigrate 2>/dev/null || true
                     echo "40 55" > /proc/sys/walt/sched_downmigrate 2>/dev/null || true
                     echo 68 > /proc/sys/walt/sched_group_upmigrate 2>/dev/null || true
@@ -3711,17 +3730,19 @@ EOF_TG_CONF
                             [ "${'$'}cool_line" -lt 2 ] && cool_line=2
                             [ "${'$'}cool_line" -gt "${'$'}b_cnt" ] && cool_line="${'$'}b_cnt"
                             b_cool_min=${'$'}(echo "${'$'}b_sorted" | sed -n "${'$'}{cool_line}p")
-                            if [ "$gamingFlag" = "true" ] || [ "$effBusMode" = "HIGH_90" ]; then
+                            if [ "$gamingLatencyFlag" = "true" ] || [ "$effBusMode" = "HIGH_90" ]; then
                                 high_line=${'$'}(((b_cnt * 9) / 10))
                                 [ "${'$'}high_line" -lt 2 ] && high_line=2
                                 [ "${'$'}high_line" -gt "${'$'}b_cnt" ] && high_line="${'$'}b_cnt"
                                 b_peak_min=${'$'}(echo "${'$'}b_sorted" | sed -n "${'$'}{high_line}p")
-                                if [ "$gamingFlag" = "true" ] && [ "${'$'}nl_cpu3_lvl" -eq 0 ] 2>/dev/null; then
+                                if [ "$throttlelessFlag" = "true" ] && [ "${'$'}nl_cpu3_lvl" -eq 0 ] 2>/dev/null; then
                                     b_target_min="${'$'}b_peak_min"
-                                elif [ "$gamingFlag" = "true" ]; then
+                                elif [ "$throttlelessFlag" = "true" ]; then
                                     b_target_min="${'$'}b_cool_min"
-                                else
+                                elif [ "${'$'}therm_stage" -eq 0 ] 2>/dev/null; then
                                     b_target_min="${'$'}b_peak_min"
+                                else
+                                    b_target_min="${'$'}b_cool_min"
                                 fi
                             elif [ "$tgameFlag" = "true" ] || [ "$effBusMode" = "RESPONSIVE_75" ]; then
                                 tg_line=${'$'}(((b_cnt * 3) / 4))
@@ -3769,17 +3790,19 @@ EOF_TG_CONF
                     [ "${'$'}d_mid" -lt 2 ] && d_mid=2
                     [ "${'$'}d_mid" -gt "${'$'}d_cnt" ] && d_mid="${'$'}d_cnt"
                     d_cool_min=${'$'}(echo "${'$'}d_sorted" | sed -n "${'$'}{d_mid}p")
-                    if [ "$gamingFlag" = "true" ] || [ "$effBusMode" = "HIGH_90" ]; then
+                    if [ "$gamingLatencyFlag" = "true" ] || [ "$effBusMode" = "HIGH_90" ]; then
                         d_high=${'$'}(((d_cnt * 9) / 10))
                         [ "${'$'}d_high" -lt 2 ] && d_high=2
                         [ "${'$'}d_high" -gt "${'$'}d_cnt" ] && d_high="${'$'}d_cnt"
                         d_peak_min=${'$'}(echo "${'$'}d_sorted" | sed -n "${'$'}{d_high}p")
-                        if [ "$gamingFlag" = "true" ] && [ "${'$'}nl_cpu3_lvl" -eq 0 ] 2>/dev/null; then
+                        if [ "$throttlelessFlag" = "true" ] && [ "${'$'}nl_cpu3_lvl" -eq 0 ] 2>/dev/null; then
                             d_target_min="${'$'}d_peak_min"
-                        elif [ "$gamingFlag" = "true" ]; then
+                        elif [ "$throttlelessFlag" = "true" ]; then
                             d_target_min="${'$'}d_cool_min"
-                        else
+                        elif [ "${'$'}therm_stage" -eq 0 ] 2>/dev/null; then
                             d_target_min="${'$'}d_peak_min"
+                        else
+                            d_target_min="${'$'}d_cool_min"
                         fi
                     elif [ "$tgameFlag" = "true" ] || [ "$effBusMode" = "RESPONSIVE_75" ]; then
                         d_tg=${'$'}(((d_cnt * 3) / 4))
@@ -3821,7 +3844,7 @@ EOF_TG_CONF
                         echo $uclampMaxPct > "${'$'}cg_root/top-app/cpu.uclamp.max" 2>/dev/null || echo $uclampMaxLegacy > "${'$'}cg_root/top-app/cpu.uclamp.max" 2>/dev/null || true
                     fi
                     [ -e "${'$'}cg_root/top-app/cpu.uclamp.latency_sensitive" ] && echo $latencySensVal > "${'$'}cg_root/top-app/cpu.uclamp.latency_sensitive" 2>/dev/null || true
-                    if [ "$gamingFlag" = "true" ] || [ "$latencySensVal" -eq 1 ]; then
+                    if [ "$gamingLatencyFlag" = "true" ] || [ "$latencySensVal" -eq 1 ]; then
                         [ -e "${'$'}cg_root/top-app/cpu.shares" ] && echo 4096 > "${'$'}cg_root/top-app/cpu.shares" 2>/dev/null || true
                     else
                         [ -e "${'$'}cg_root/top-app/cpu.shares" ] && echo 1024 > "${'$'}cg_root/top-app/cpu.shares" 2>/dev/null || true
@@ -3844,7 +3867,7 @@ EOF_TG_CONF
                     if [ -d "${'$'}cg_root/${'$'}bg_cg" ]; then
                         chown root:root "${'$'}cg_root/${'$'}bg_cg/cpu.uclamp.max" "${'$'}cg_root/${'$'}bg_cg/cpu.uclamp.latency_sensitive" "${'$'}cg_root/${'$'}bg_cg/cpu.shares" 2>/dev/null || true
                         chmod 0666 "${'$'}cg_root/${'$'}bg_cg/cpu.uclamp.max" "${'$'}cg_root/${'$'}bg_cg/cpu.uclamp.latency_sensitive" "${'$'}cg_root/${'$'}bg_cg/cpu.shares" 2>/dev/null || true
-                        if [ "$gamingFlag" = "true" ]; then
+                        if [ "$gamingLatencyFlag" = "true" ]; then
                             echo 50 > "${'$'}cg_root/${'$'}bg_cg/cpu.uclamp.max" 2>/dev/null || echo 512 > "${'$'}cg_root/${'$'}bg_cg/cpu.uclamp.max" 2>/dev/null || true
                             [ -e "${'$'}cg_root/${'$'}bg_cg/cpu.uclamp.latency_sensitive" ] && echo 0 > "${'$'}cg_root/${'$'}bg_cg/cpu.uclamp.latency_sensitive" 2>/dev/null || true
                             [ -e "${'$'}cg_root/${'$'}bg_cg/cpu.shares" ] && echo 512 > "${'$'}cg_root/${'$'}bg_cg/cpu.shares" 2>/dev/null || true
@@ -4029,18 +4052,18 @@ EOF_TG_CONF
                         echo Y > /sys/module/adreno_idler/parameters/adreno_idler_active 2>/dev/null || true
                     fi
                 fi
-                if [ "$gamingFlag" = "true" ]; then
+                if [ "$gamingLatencyFlag" = "true" ]; then
                     echo 0 > /sys/class/kgsl/kgsl-3d0/bus_split 2>/dev/null || true
                     echo 1 > /sys/class/kgsl/kgsl-3d0/preemption 2>/dev/null || true
                     echo 0 > /sys/class/kgsl/kgsl-3d0/popp 2>/dev/null || true
                     echo 100 > /sys/class/kgsl/kgsl-3d0/pmqos_active_latency 2>/dev/null || true
                     echo 10 > /sys/class/kgsl/kgsl-3d0/devfreq/polling_interval 2>/dev/null || true
-                    # Keep dynamic GPU rail/clock sleep (force_*_on=0) with generous 1500ms idle_timer below 54C
-                    # so frames stay locked-smooth without continuous static GPU power baking the shared silicon die!
+                    # Keep dynamic GPU rail/clock sleep (force_*_on=0) with generous 1500ms idle_timer while unthrottled
+                    # so 120 FPS frames stay locked-smooth without continuous static GPU power baking the shared silicon die!
                     echo 0 > /sys/class/kgsl/kgsl-3d0/force_clk_on 2>/dev/null || true
                     echo 0 > /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null || true
                     echo 0 > /sys/class/kgsl/kgsl-3d0/force_rail_on 2>/dev/null || true
-                    if [ "${'$'}nl_gpu_lvl" -eq 0 ] 2>/dev/null; then
+                    if { [ "$throttlelessFlag" = "true" ] && [ "${'$'}nl_gpu_lvl" -eq 0 ] 2>/dev/null; } || { [ "$throttlelessFlag" != "true" ] && [ "${'$'}therm_stage" -eq 0 ] 2>/dev/null; }; then
                         echo 1500 > /sys/class/kgsl/kgsl-3d0/idle_timer 2>/dev/null || true
                     else
                         echo 250 > /sys/class/kgsl/kgsl-3d0/idle_timer 2>/dev/null || true
@@ -4244,6 +4267,8 @@ CTRL_GPU_PL="$ctrlGpuPlFlag"
 SUPPRESS_ROM_THERM="$suppressRomThermFlag"
 BG_SHED_FLAG="$bgShedFlag"
 GAMING_OR_PERF_FLAG="$gamingOrPerfFlag"
+GAMING_LATENCY_FLAG="$gamingLatencyFlag"
+ADRENO_BOOST_VAL="$adrenoBoostVal"
 UNCAPPED_FLAG="$uncappedFlag"
 THROTTLELESS_FLAG="$throttlelessFlag"
 TGAME_FLAG="$tgameFlag"
@@ -5196,10 +5221,15 @@ while read -r pid_chk < /data/local/tmp/.dragon_enforcer.pid 2>/dev/null && [ "$
         done
     fi
     if [ "${'$'}GAMING_OR_PERF_FLAG" = "true" ]; then
-        if [ "${'$'}THROTTLELESS_FLAG" = "true" ] && [ "${'$'}stage_changed" -eq 1 ]; then
+        if [ "${'$'}GAMING_LATENCY_FLAG" = "true" ] && [ "${'$'}stage_changed" -eq 1 ]; then
             tgt_ufs=1
             tgt_cdis=0
-            if [ "${'$'}nl_cpu3_lvl" -eq 0 ] 2>/dev/null; then
+            if [ "${'$'}THROTTLELESS_FLAG" = "true" ]; then
+                if [ "${'$'}nl_cpu3_lvl" -eq 0 ] 2>/dev/null; then
+                    tgt_ufs=0
+                    tgt_cdis=1
+                fi
+            elif [ "${'$'}cur_stage" -eq 0 ] 2>/dev/null; then
                 tgt_ufs=0
                 tgt_cdis=1
             fi
@@ -5225,7 +5255,7 @@ while read -r pid_chk < /data/local/tmp/.dragon_enforcer.pid 2>/dev/null && [ "$
                     else
                         btmin="${'$'}bcool"
                     fi
-                elif [ "${'$'}TGAME_FLAG" = "true" ]; then
+                elif [ "${'$'}TGAME_FLAG" = "true" ] || [ "${'$'}GAMING_LATENCY_FLAG" = "true" ]; then
                     if [ "${'$'}cur_stage" -eq 0 ] 2>/dev/null; then
                         btmin="${'$'}bpeak"
                     elif [ "${'$'}cur_stage" -le 1 ] 2>/dev/null; then
@@ -5510,11 +5540,14 @@ while read -r pid_chk < /data/local/tmp/.dragon_enforcer.pid 2>/dev/null && [ "$
             echo "${'$'}t_gmax_hz" > /sys/class/kgsl/kgsl-3d0/devfreq/max_freq 2>/dev/null
             chmod 0444 /sys/class/kgsl/kgsl-3d0/min_pwrlevel /sys/class/kgsl/kgsl-3d0/max_pwrlevel /sys/class/kgsl/kgsl-3d0/thermal_pwrlevel /sys/class/kgsl/kgsl-3d0/min_gpuclk /sys/class/kgsl/kgsl-3d0/max_gpuclk /sys/class/kgsl/kgsl-3d0/devfreq/min_freq /sys/class/kgsl/kgsl-3d0/devfreq/max_freq 2>/dev/null
         fi
-        if [ "${'$'}THROTTLELESS_FLAG" = "true" ] || [ "${'$'}TGAME_FLAG" = "true" ]; then
+        if [ "${'$'}THROTTLELESS_FLAG" = "true" ] || [ "${'$'}TGAME_FLAG" = "true" ] || [ "${'$'}GAMING_LATENCY_FLAG" = "true" ]; then
             tgt_force=0; tgt_idle=90
             if [ "${'$'}THROTTLELESS_FLAG" = "true" ]; then
                 tgt_idle=250
                 [ "${'$'}nl_gpu_lvl" -eq 0 ] 2>/dev/null && tgt_idle=1500
+            elif [ "${'$'}GAMING_LATENCY_FLAG" = "true" ]; then
+                tgt_idle=250
+                [ "${'$'}cur_stage" -eq 0 ] 2>/dev/null && tgt_idle=1500
             elif [ "${'$'}TGAME_FLAG" = "true" ] && [ "${'$'}g_tpl" -eq 0 ] 2>/dev/null; then
                 tgt_idle=500
             fi
@@ -5536,11 +5569,15 @@ while read -r pid_chk < /data/local/tmp/.dragon_enforcer.pid 2>/dev/null && [ "$
                     chmod 0444 /sys/class/kgsl/kgsl-3d0/idle_timer 2>/dev/null
                 fi
             fi
+            tgt_ab="${'$'}{ADRENO_BOOST_VAL:-3}"
+            if [ "${'$'}THROTTLELESS_FLAG" = "true" ] || [ "${'$'}TGAME_FLAG" = "true" ]; then
+                tgt_ab=3
+            fi
             read -r cur_ab < /sys/class/kgsl/kgsl-3d0/adrenoboost 2>/dev/null || cur_ab=""
-            if [ -n "${'$'}cur_ab" ] && [ "${'$'}cur_ab" != "3" ]; then
+            if [ -n "${'$'}cur_ab" ] && [ "${'$'}cur_ab" != "${'$'}tgt_ab" ]; then
                 chmod 0666 /sys/class/kgsl/kgsl-3d0/adrenoboost /sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost 2>/dev/null
-                echo 3 > /sys/class/kgsl/kgsl-3d0/adrenoboost 2>/dev/null
-                echo 3 > /sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost 2>/dev/null
+                echo "${'$'}tgt_ab" > /sys/class/kgsl/kgsl-3d0/adrenoboost 2>/dev/null
+                echo "${'$'}tgt_ab" > /sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost 2>/dev/null
                 chmod 0444 /sys/class/kgsl/kgsl-3d0/adrenoboost /sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost 2>/dev/null
             fi
         fi
@@ -6254,6 +6291,61 @@ EOF_GUARDIAN
             if [ -d /data/system/joyose ]; then
                 chmod 755 /data/system/joyose 2>/dev/null || true
             fi
+        """.trimIndent()
+        executeCommand(cmd)
+    }
+
+    /**
+     * Applies PUBG Mobile / BGMI (Unreal Engine 4) constant 120 FPS tuning:
+     * - Bypasses Xiaomi Joyose game frame caps & enables HWUI hint manager
+     * - Sets Android GameMode & GameOverlay fps=120 exclusively for PUBG/BGMI packages
+     *   (never modifies global display min_refresh_rate or peak_refresh_rate)
+     * - Places active PUBG/BGMI processes into top-app and boosts UE4 GameThread / RenderThread /
+     *   RHIThread / Vulkan / TaskGraph thread priorities and sched_util_clamp_min
+     */
+    suspend fun enforcePubgMobile120FpsGameTuning(appPackageName: String): CommandResult = withContext(Dispatchers.IO) {
+        if (!isRootAvailable) {
+            return@withContext CommandResult(0, "Non-root PUGB Mobile 120 FPS profile active", isSimulated = false)
+        }
+        val cmd = """
+            setprop persist.sys.game.fps 120 2>/dev/null || true
+            setprop debug.hwui.use_hint_manager true 2>/dev/null || true
+            setprop vendor.perf.gestureflingboost.enable true 2>/dev/null || true
+            setprop debug.sf.latch_unsignaled 0 2>/dev/null || true
+            setprop debug.sf.auto_latch_unsignaled 0 2>/dev/null || true
+            setprop debug.sf.set_idle_timer_ms 0 2>/dev/null || true
+            setprop debug.sf.set_touch_timer_ms 2000 2>/dev/null || true
+            am stopservice com.xiaomi.joyose/.JoyoseService 2>/dev/null || true
+
+            PUBG_PKGS="com.tencent.ig com.pubg.imobile com.pubg.krmobile com.vng.pubgmobile com.rekoo.pubgm com.tencent.tmgp.pubgmhd"
+            for pkg in ${'$'}PUBG_PKGS; do
+                if pm path "${'$'}pkg" >/dev/null 2>&1; then
+                    cmd game mode performance "${'$'}pkg" 2>/dev/null || cmd game set --mode 2 "${'$'}pkg" 2>/dev/null || true
+                    cmd game set --fps 120 --downscale 1.0 "${'$'}pkg" 2>/dev/null || true
+                    device_config put game_overlay "${'$'}pkg" "mode=2,fps=120,useAngle=false,loadingBoost=999999999" 2>/dev/null || true
+                fi
+
+                G_PIDS=${'$'}(pidof "${'$'}pkg" 2>/dev/null)
+                for g_pid in ${'$'}G_PIDS; do
+                    [ -d "/proc/${'$'}g_pid" ] || continue
+                    echo "${'$'}g_pid" > /dev/cpuctl/top-app/cgroup.procs 2>/dev/null || true
+                    echo "${'$'}g_pid" > /dev/cpuset/top-app/cgroup.procs 2>/dev/null || true
+                    renice -n -8 -p "${'$'}g_pid" 2>/dev/null || true
+                    for t_dir in /proc/${'$'}g_pid/task/*; do
+                        [ -f "${'$'}t_dir/comm" ] || continue
+                        t_name=${'$'}(cat "${'$'}t_dir/comm" 2>/dev/null)
+                        case "${'$'}t_name" in
+                            *GameThread*|*RenderThread*|*RHIThread*|*Vulkan*|*TaskGraph*|*AudioThread*)
+                                t_id=${'$'}(basename "${'$'}t_dir")
+                                renice -n -10 -p "${'$'}t_id" 2>/dev/null || true
+                                if [ -f "/proc/${'$'}g_pid/task/${'$'}t_id/sched_util_clamp_min" ]; then
+                                    echo 512 > "/proc/${'$'}g_pid/task/${'$'}t_id/sched_util_clamp_min" 2>/dev/null || true
+                                fi
+                                ;;
+                        esac
+                    done
+                done
+            done
         """.trimIndent()
         executeCommand(cmd)
     }

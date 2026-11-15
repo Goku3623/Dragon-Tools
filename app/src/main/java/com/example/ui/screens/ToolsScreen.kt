@@ -62,6 +62,7 @@ import com.example.data.model.FpsRecordedSession
 import com.example.data.model.FpsRecorderConfig
 import com.example.data.repository.KernelRepository
 import com.example.service.FloatingOverlayService
+import com.example.ui.haptics.LocalDragonHaptics
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -129,6 +130,7 @@ private fun MoreGridToolItem(
     item: MoreLauncherItem,
     modifier: Modifier = Modifier
 ) {
+    val haptics = LocalDragonHaptics.current
     val primary = MaterialTheme.colorScheme.primary
     val containerColor = if (item.isActive) {
         primary.copy(alpha = 0.24f)
@@ -144,7 +146,10 @@ private fun MoreGridToolItem(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = item.onClick)
+            .clickable {
+                haptics.tap()
+                item.onClick()
+            }
             .padding(vertical = 4.dp, horizontal = 2.dp)
             .testTag("more_tool_${item.id}"),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -201,11 +206,16 @@ private fun MoreQuickToggleCard(
     testTag: String,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
-            .clickable { onCheckedChange(!checked) }
+            .clickable {
+                val next = !checked
+                haptics.toggle(next)
+                onCheckedChange(next)
+            }
             .testTag(testTag),
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -242,7 +252,10 @@ private fun MoreQuickToggleCard(
             }
             Switch(
                 checked = checked,
-                onCheckedChange = onCheckedChange,
+                onCheckedChange = {
+                    haptics.toggle(it)
+                    onCheckedChange(it)
+                },
                 colors = moreMaterial3SwitchColors()
             )
         }
@@ -256,9 +269,11 @@ fun ToolsScreen(
     requestedSection: Int? = null,
     resetHubSignal: Int = 0,
     onConsumeRequestedSection: () -> Unit = {},
-    onNavigateToMainTab: (Int) -> Unit = {}
+    onNavigateToMainTab: (Int) -> Unit = {},
+    onOpenBrowser: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val haptics = LocalDragonHaptics.current
     val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
 
@@ -289,6 +304,7 @@ fun ToolsScreen(
     }
 
     BackHandler(enabled = selectedToolSection != null) {
+        haptics.tap()
         selectedToolSection = null
     }
 
@@ -377,6 +393,12 @@ fun ToolsScreen(
             )
 
             val xposedAndSystemTools = listOf(
+                MoreLauncherItem(
+                    id = "dragon_browser",
+                    label = "Web Browser",
+                    icon = Icons.Default.Public,
+                    onClick = onOpenBrowser
+                ),
                 MoreLauncherItem(
                     id = "ad_blocker",
                     label = "Ad Blocker",
@@ -478,7 +500,10 @@ fun ToolsScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             IconButton(
-                                onClick = { selectedToolSection = null },
+                                onClick = {
+                                    haptics.tap()
+                                    selectedToolSection = null
+                                },
                                 modifier = Modifier
                                     .minimumInteractiveComponentSize()
                                     .testTag("more_tool_back_button")
@@ -501,7 +526,10 @@ fun ToolsScreen(
                         }
 
                         FilledTonalButton(
-                            onClick = { selectedToolSection = null },
+                            onClick = {
+                                haptics.tap()
+                                selectedToolSection = null
+                            },
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.height(32.dp)
@@ -596,18 +624,27 @@ fun ToolsScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     FilterChip(
                                         selected = !filterSystem,
-                                        onClick = { filterSystem = false },
+                                        onClick = {
+                                            haptics.tap()
+                                            filterSystem = false
+                                        },
                                         label = { Text("User Apps") }
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     FilterChip(
                                         selected = filterSystem,
-                                        onClick = { filterSystem = true },
+                                        onClick = {
+                                            haptics.tap()
+                                            filterSystem = true
+                                        },
                                         label = { Text("System Apps") }
                                     )
                                 }
 
-                                TextButton(onClick = { repository.selectAllApps(selectedCount == 0) }) {
+                                TextButton(onClick = {
+                                    haptics.tap()
+                                    repository.selectAllApps(selectedCount == 0)
+                                }) {
                                     Text(if (selectedCount == 0) "Select All" else "Clear Selection", fontSize = 11.sp)
                                 }
                             }
@@ -620,7 +657,10 @@ fun ToolsScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Button(
-                                    onClick = { repository.freezeSelectedApps(true) },
+                                    onClick = {
+                                        haptics.heavyAction()
+                                        repository.freezeSelectedApps(true)
+                                    },
                                     enabled = selectedCount > 0,
                                     shape = RoundedCornerShape(10.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
@@ -632,7 +672,10 @@ fun ToolsScreen(
                                 }
 
                                 Button(
-                                    onClick = { repository.freezeSelectedApps(false) },
+                                    onClick = {
+                                        haptics.confirm()
+                                        repository.freezeSelectedApps(false)
+                                    },
                                     enabled = selectedCount > 0,
                                     shape = RoundedCornerShape(10.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
@@ -718,7 +761,10 @@ fun ToolsScreen(
                                 val filters = listOf("speed-profile", "speed", "everything", "verify")
                                 filters.forEach { mode ->
                                     Button(
-                                        onClick = { repository.runDexOpt(mode) },
+                                        onClick = {
+                                            haptics.heavyAction()
+                                            repository.runDexOpt(mode)
+                                        },
                                         enabled = !dexOptConfig.isRunning,
                                         modifier = Modifier.weight(1f),
                                         shape = RoundedCornerShape(10.dp),
@@ -780,6 +826,7 @@ fun ToolsScreen(
                                 Button(
                                     onClick = {
                                         if (newTitle.isNotBlank() && newCode.isNotBlank()) {
+                                            haptics.confirm()
                                             repository.addNewScript(newTitle, newDesc, newCode)
                                             showNewScriptDialog = false
                                             newTitle = ""
@@ -792,7 +839,10 @@ fun ToolsScreen(
                                 }
                             },
                             dismissButton = {
-                                TextButton(onClick = { showNewScriptDialog = false }) { Text("Cancel") }
+                                TextButton(onClick = {
+                                    haptics.tap()
+                                    showNewScriptDialog = false
+                                }) { Text("Cancel") }
                             }
                         )
                     }
@@ -809,7 +859,10 @@ fun ToolsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Button(
-                            onClick = { showNewScriptDialog = true },
+                            onClick = {
+                                haptics.tap()
+                                showNewScriptDialog = true
+                            },
                             shape = RoundedCornerShape(10.dp),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                         ) {
@@ -897,6 +950,7 @@ fun ToolsScreen(
                                 Switch(
                                     checked = thermalConfig.enabled,
                                     onCheckedChange = { enabled ->
+                                        haptics.toggle(enabled)
                                         repository.updateThermalConfig(enabled, thermalConfig.criticalThresholdC)
                                     },
                                     colors = moreMaterial3SwitchColors()
@@ -928,6 +982,7 @@ fun ToolsScreen(
                             Slider(
                                 value = thermalConfig.criticalThresholdC,
                                 onValueChange = { newThreshold ->
+                                    haptics.sliderTick()
                                     repository.updateThermalConfig(thermalConfig.enabled, newThreshold)
                                 },
                                 valueRange = 40.0f..52.0f,
@@ -947,6 +1002,7 @@ fun ToolsScreen(
                                     FilterChip(
                                         selected = isSelected,
                                         onClick = {
+                                            haptics.tap()
                                             repository.updateThermalConfig(thermalConfig.enabled, presetTemp)
                                         },
                                         label = {
@@ -1004,6 +1060,7 @@ fun ToolsScreen(
                             ) {
                                 Button(
                                     onClick = {
+                                        haptics.confirm()
                                         coroutineScope.launch {
                                             val csv = LogExportSyncManager.generateCsv(recentLogs)
                                             LogExportSyncManager.exportAndShareFile(
@@ -1024,6 +1081,7 @@ fun ToolsScreen(
 
                                 Button(
                                     onClick = {
+                                        haptics.confirm()
                                         coroutineScope.launch {
                                             val json = LogExportSyncManager.generateJson(recentLogs)
                                             LogExportSyncManager.exportAndShareFile(
@@ -1047,6 +1105,7 @@ fun ToolsScreen(
 
                             OutlinedButton(
                                 onClick = {
+                                    haptics.confirm()
                                     coroutineScope.launch {
                                         val json = LogExportSyncManager.generateJson(recentLogs)
                                         clipboardManager.setText(AnnotatedString(json))
@@ -1099,7 +1158,10 @@ fun ToolsScreen(
                                 }
                                 Switch(
                                     checked = isLoggingEnabled,
-                                    onCheckedChange = { repository.toggleTelemetryLogging(it) },
+                                    onCheckedChange = {
+                                        haptics.toggle(it)
+                                        repository.toggleTelemetryLogging(it)
+                                    },
                                     colors = moreMaterial3SwitchColors()
                                 )
                             }
@@ -1107,7 +1169,11 @@ fun ToolsScreen(
                             Spacer(modifier = Modifier.height(10.dp))
 
                             Button(
-                                onClick = { repository.toggleTelemetryLogging(!isLoggingEnabled) },
+                                onClick = {
+                                    val next = !isLoggingEnabled
+                                    haptics.toggle(next)
+                                    repository.toggleTelemetryLogging(next)
+                                },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(10.dp),
                                 colors = ButtonDefaults.buttonColors(
@@ -1196,6 +1262,7 @@ fun AppListItemRow(
     onToggleSelect: () -> Unit,
     onToggleAutostart: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -1218,7 +1285,10 @@ fun AppListItemRow(
         ) {
             Checkbox(
                 checked = app.isSelected,
-                onCheckedChange = { onToggleSelect() }
+                onCheckedChange = {
+                    haptics.toggle(!app.isSelected)
+                    onToggleSelect()
+                }
             )
 
             Spacer(modifier = Modifier.width(6.dp))
@@ -1248,7 +1318,10 @@ fun AppListItemRow(
             }
 
             IconButton(
-                onClick = onToggleAutostart,
+                onClick = {
+                    haptics.tap()
+                    onToggleAutostart()
+                },
                 modifier = Modifier.size(36.dp)
             ) {
                 Icon(
@@ -1268,6 +1341,7 @@ fun ScriptItemCard(
     onRun: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
@@ -1293,7 +1367,10 @@ fun ScriptItemCard(
 
                 Row {
                     FilledTonalButton(
-                        onClick = onRun,
+                        onClick = {
+                            haptics.heavyAction()
+                            onRun()
+                        },
                         shape = RoundedCornerShape(8.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                         modifier = Modifier.defaultMinSize(minHeight = 32.dp)
@@ -1305,7 +1382,13 @@ fun ScriptItemCard(
 
                     if (!script.isPreset) {
                         Spacer(modifier = Modifier.width(6.dp))
-                        IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                        IconButton(
+                            onClick = {
+                                haptics.warning()
+                                onDelete()
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
                             Icon(Icons.Default.Delete, contentDescription = "Delete", tint = DangerRed, modifier = Modifier.size(16.dp))
                         }
                     }
@@ -1343,6 +1426,7 @@ fun VramTuningSection(
     vramConfig: com.example.data.model.VramConfig,
     repository: KernelRepository
 ) {
+    val haptics = LocalDragonHaptics.current
     var vramSize by remember(vramConfig.vramSizeGb) { mutableStateOf(vramConfig.vramSizeGb) }
     var swappiness by remember(vramConfig.swappiness) { mutableStateOf(vramConfig.swappiness.toFloat()) }
     var zramSize by remember(vramConfig.zramSizeGb) { mutableStateOf(vramConfig.zramSizeGb) }
@@ -1568,7 +1652,10 @@ fun VramTuningSection(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Button(
-                    onClick = { repository.grantRootAndRefreshRamInfo() },
+                    onClick = {
+                        haptics.confirm()
+                        repository.grantRootAndRefreshRamInfo()
+                    },
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
@@ -1631,6 +1718,7 @@ fun VramTuningSection(
                         FilterChip(
                             selected = isSelected,
                             onClick = {
+                                haptics.tap()
                                 vramSize = size
                                 repository.updateVramConfig(vramConfig.copy(vramSizeGb = size))
                             },
@@ -1677,6 +1765,7 @@ fun VramTuningSection(
                 Slider(
                     value = swappiness,
                     onValueChange = {
+                        haptics.sliderTick()
                         swappiness = it
                         repository.updateVramConfig(vramConfig.copy(swappiness = it.toInt()))
                     },
@@ -1704,6 +1793,7 @@ fun VramTuningSection(
                         FilterChip(
                             selected = isSelected,
                             onClick = {
+                                haptics.tap()
                                 swappiness = value.toFloat()
                                 repository.updateVramConfig(vramConfig.copy(swappiness = value))
                             },
@@ -1765,6 +1855,7 @@ fun VramTuningSection(
                         FilterChip(
                             selected = isSelected,
                             onClick = {
+                                haptics.tap()
                                 zramSize = size
                                 repository.updateVramConfig(vramConfig.copy(zramSizeGb = size))
                             },
@@ -1792,6 +1883,7 @@ fun VramTuningSection(
                         FilterChip(
                             selected = isSelected,
                             onClick = {
+                                haptics.tap()
                                 zramAlgo = algo
                                 repository.updateVramConfig(vramConfig.copy(zramAlgorithm = algo))
                             },
@@ -1849,6 +1941,7 @@ fun VramTuningSection(
                         FilterChip(
                             selected = isSelected,
                             onClick = {
+                                haptics.tap()
                                 pageCluster = cluster
                                 repository.updateVramConfig(vramConfig.copy(pageCluster = cluster))
                             },
@@ -1879,6 +1972,7 @@ fun VramTuningSection(
                 Slider(
                     value = vfsPressure,
                     onValueChange = {
+                        haptics.sliderTick()
                         vfsPressure = it
                         repository.updateVramConfig(vramConfig.copy(vfsCachePressure = it.toInt()))
                     },
@@ -1902,7 +1996,10 @@ fun VramTuningSection(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = { repository.applyVramSettings() },
+                        onClick = {
+                            haptics.confirm()
+                            repository.applyVramSettings()
+                        },
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1.2f)
                     ) {
@@ -1912,7 +2009,10 @@ fun VramTuningSection(
                     }
 
                     OutlinedButton(
-                        onClick = { repository.purgeVramAndCaches() },
+                        onClick = {
+                            haptics.heavyAction()
+                            repository.purgeVramAndCaches()
+                        },
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1.1f)
                     ) {
@@ -1928,7 +2028,10 @@ fun VramTuningSection(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    TextButton(onClick = { repository.resetVramDefaults() }) {
+                    TextButton(onClick = {
+                        haptics.warning()
+                        repository.resetVramDefaults()
+                    }) {
                         Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Reset Snapdragon Defaults", fontSize = 11.sp)
@@ -2035,6 +2138,7 @@ private fun FpsSettingToggleRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -2054,7 +2158,10 @@ private fun FpsSettingToggleRow(
         }
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = {
+                haptics.toggle(it)
+                onCheckedChange(it)
+            },
             colors = moreMaterial3SwitchColors()
         )
     }
@@ -2072,6 +2179,7 @@ fun FpsMonitorSection(
     repository: KernelRepository
 ) {
     val context = LocalContext.current
+    val haptics = LocalDragonHaptics.current
     val coroutineScope = rememberCoroutineScope()
     var showTargetAppDialog by remember { mutableStateOf(false) }
     var appSearchQuery by remember { mutableStateOf("") }
@@ -2162,6 +2270,7 @@ fun FpsMonitorSection(
 
                     OutlinedButton(
                         onClick = {
+                            haptics.tap()
                             customAppName = "Global SurfaceFlinger"
                             customPkgName = "surfaceflinger.global"
                         },
@@ -2195,6 +2304,7 @@ fun FpsMonitorSection(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
+                                        haptics.tap()
                                         customAppName = app.appName
                                         customPkgName = app.packageName
                                     },
@@ -2227,6 +2337,7 @@ fun FpsMonitorSection(
                 Button(
                     onClick = {
                         if (customAppName.isNotBlank() && customPkgName.isNotBlank()) {
+                            haptics.confirm()
                             repository.updateFpsRecorderConfig(
                                 recorderConfig.copy(
                                     targetAppName = customAppName.trim(),
@@ -2241,7 +2352,10 @@ fun FpsMonitorSection(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showTargetAppDialog = false }) {
+                TextButton(onClick = {
+                    haptics.tap()
+                    showTargetAppDialog = false
+                }) {
                     Text("Cancel")
                 }
             }
@@ -2420,7 +2534,10 @@ fun FpsMonitorSection(
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Button(
-                                onClick = { repository.toggleFpsRecording() },
+                                onClick = {
+                                    haptics.heavyAction()
+                                    repository.toggleFpsRecording()
+                                },
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = if (isRecording) DangerRed else MaterialTheme.colorScheme.primary
                                 ),
@@ -2451,6 +2568,7 @@ fun FpsMonitorSection(
                                     overlayConfig.overlayStyle == FpsOverlayStyle.MINI_PILL
                                 Surface(
                                     onClick = {
+                                        haptics.toggle(!isMiniPillActive)
                                         if (isMiniPillActive) {
                                             applyFloatingHudAction(false, FpsOverlayStyle.MINI_PILL)
                                         } else {
@@ -2479,7 +2597,11 @@ fun FpsMonitorSection(
                                 }
 
                                 Surface(
-                                    onClick = { toggleFloatingHudAction(!overlayConfig.isEnabled) },
+                                    onClick = {
+                                        val next = !overlayConfig.isEnabled
+                                        haptics.toggle(next)
+                                        toggleFloatingHudAction(next)
+                                    },
                                     shape = RoundedCornerShape(7.dp),
                                     color = if (overlayConfig.isEnabled) SuccessGreen.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
                                     border = BorderStroke(
@@ -2511,7 +2633,10 @@ fun FpsMonitorSection(
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { showPermissionDetails = !showPermissionDetails },
+                        .clickable {
+                            haptics.tap()
+                            showPermissionDetails = !showPermissionDetails
+                        },
                     shape = RoundedCornerShape(10.dp),
                     color = if (allCorePermsReady) SuccessGreen.copy(alpha = 0.08f) else WarningOrange.copy(alpha = 0.10f),
                     border = BorderStroke(
@@ -2601,7 +2726,10 @@ fun FpsMonitorSection(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Button(
-                                        onClick = { repository.requestRootFpsPermissionAndRefresh() },
+                                        onClick = {
+                                            haptics.confirm()
+                                            repository.requestRootFpsPermissionAndRefresh()
+                                        },
                                         shape = RoundedCornerShape(8.dp),
                                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                                         modifier = Modifier.weight(1.2f).height(30.dp)
@@ -2612,6 +2740,7 @@ fun FpsMonitorSection(
                                     }
                                     OutlinedButton(
                                         onClick = {
+                                            haptics.tap()
                                             try {
                                                 context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                                             } catch (_: Exception) {}
@@ -2706,7 +2835,10 @@ fun FpsMonitorSection(
                 val selected = activeFpsTab == idx
                 FilterChip(
                     selected = selected,
-                    onClick = { activeFpsTab = idx },
+                    onClick = {
+                        haptics.tabSelect()
+                        activeFpsTab = idx
+                    },
                     label = {
                         Text(
                             text = label,
@@ -2762,7 +2894,10 @@ fun FpsMonitorSection(
                             }
                             if (recorderConfig.recordedSessions.isNotEmpty()) {
                                 TextButton(
-                                    onClick = { repository.clearAllFpsSessions() },
+                                    onClick = {
+                                        haptics.warning()
+                                        repository.clearAllFpsSessions()
+                                    },
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                                     modifier = Modifier.height(30.dp)
                                 ) {
@@ -2796,7 +2931,13 @@ fun FpsMonitorSection(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
-                                IconButton(onClick = { lastSavedJpgPath = null }, modifier = Modifier.size(22.dp)) {
+                                IconButton(
+                                    onClick = {
+                                        haptics.tap()
+                                        lastSavedJpgPath = null
+                                    },
+                                    modifier = Modifier.size(22.dp)
+                                ) {
                                     Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = SuccessGreen, modifier = Modifier.size(14.dp))
                                 }
                             }
@@ -2920,6 +3061,7 @@ fun FpsMonitorSection(
                             }
                             FilledTonalButton(
                                 onClick = {
+                                    haptics.tap()
                                     customAppName = recorderConfig.targetAppName
                                     customPkgName = recorderConfig.targetPackageName
                                     showTargetAppDialog = true
@@ -2947,7 +3089,10 @@ fun FpsMonitorSection(
                                 val isSelected = (recorderConfig.captureSource == source)
                                 FilterChip(
                                     selected = isSelected,
-                                    onClick = { repository.updateFpsRecorderConfig(recorderConfig.copy(captureSource = source)) },
+                                    onClick = {
+                                        haptics.tap()
+                                        repository.updateFpsRecorderConfig(recorderConfig.copy(captureSource = source))
+                                    },
                                     label = {
                                         Text(
                                             shortLabel,
@@ -2975,7 +3120,10 @@ fun FpsMonitorSection(
                                 val isSelected = (recorderConfig.samplingIntervalMs == ms)
                                 FilterChip(
                                     selected = isSelected,
-                                    onClick = { repository.updateFpsRecorderConfig(recorderConfig.copy(samplingIntervalMs = ms)) },
+                                    onClick = {
+                                        haptics.tap()
+                                        repository.updateFpsRecorderConfig(recorderConfig.copy(samplingIntervalMs = ms))
+                                    },
                                     label = {
                                         Text(label, fontSize = 10.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
                                     },
@@ -2999,7 +3147,10 @@ fun FpsMonitorSection(
                                 val isSelected = (recorderConfig.durationPresetSec == sec)
                                 FilterChip(
                                     selected = isSelected,
-                                    onClick = { repository.updateFpsRecorderConfig(recorderConfig.copy(durationPresetSec = sec)) },
+                                    onClick = {
+                                        haptics.tap()
+                                        repository.updateFpsRecorderConfig(recorderConfig.copy(durationPresetSec = sec))
+                                    },
                                     label = {
                                         Text(label, fontSize = 10.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
                                     },
@@ -3027,6 +3178,7 @@ fun FpsMonitorSection(
                         Slider(
                             value = recorderConfig.fpsDropAlertThreshold.toFloat(),
                             onValueChange = {
+                                haptics.sliderTick()
                                 repository.updateFpsRecorderConfig(recorderConfig.copy(fpsDropAlertThreshold = it.toInt()))
                             },
                             valueRange = 30f..115f,
@@ -3095,7 +3247,10 @@ fun FpsMonitorSection(
                             }
                             Switch(
                                 checked = overlayConfig.isEnabled,
-                                onCheckedChange = toggleFloatingHudAction,
+                                onCheckedChange = {
+                                    haptics.toggle(it)
+                                    toggleFloatingHudAction(it)
+                                },
                                 colors = moreMaterial3SwitchColors(),
                                 modifier = Modifier.testTag("fps_hud_master_switch")
                             )
@@ -3131,6 +3286,7 @@ fun FpsMonitorSection(
                                 Switch(
                                     checked = overlayConfig.isEnabled && isMiniPillMode,
                                     onCheckedChange = { enableMini ->
+                                        haptics.toggle(enableMini)
                                         if (enableMini) {
                                             applyFloatingHudAction(true, FpsOverlayStyle.MINI_PILL)
                                         } else {
@@ -3151,6 +3307,7 @@ fun FpsMonitorSection(
                         ) {
                             Surface(
                                 onClick = {
+                                    haptics.tap()
                                     repository.updateFpsOverlayConfig(
                                         overlayConfig.copy(overlayStyle = FpsOverlayStyle.MINI_PILL)
                                     )
@@ -3190,6 +3347,7 @@ fun FpsMonitorSection(
 
                             Surface(
                                 onClick = {
+                                    haptics.tap()
                                     repository.updateFpsOverlayConfig(
                                         overlayConfig.copy(overlayStyle = FpsOverlayStyle.FULL_METER)
                                     )
@@ -3256,7 +3414,10 @@ fun FpsMonitorSection(
                                     }
 
                                     Surface(
-                                        onClick = { repository.toggleFpsRecording() },
+                                        onClick = {
+                                            haptics.heavyAction()
+                                            repository.toggleFpsRecording()
+                                        },
                                         shape = RoundedCornerShape(50),
                                         color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.86f),
                                         border = if (isRecording) BorderStroke(1.dp, DangerRed.copy(alpha = 0.8f)) else null,
@@ -3296,19 +3457,28 @@ fun FpsMonitorSection(
                             ) {
                                 FilterChip(
                                     selected = overlayConfig.showForegroundApp,
-                                    onClick = { repository.updateFpsOverlayConfig(overlayConfig.copy(showForegroundApp = !overlayConfig.showForegroundApp)) },
+                                    onClick = {
+                                        haptics.tap()
+                                        repository.updateFpsOverlayConfig(overlayConfig.copy(showForegroundApp = !overlayConfig.showForegroundApp))
+                                    },
                                     label = { Text("App Name", fontSize = 10.sp, maxLines = 1) },
                                     modifier = Modifier.weight(1f).height(32.dp)
                                 )
                                 FilterChip(
                                     selected = overlayConfig.showFps,
-                                    onClick = { repository.updateFpsOverlayConfig(overlayConfig.copy(showFps = !overlayConfig.showFps)) },
+                                    onClick = {
+                                        haptics.tap()
+                                        repository.updateFpsOverlayConfig(overlayConfig.copy(showFps = !overlayConfig.showFps))
+                                    },
                                     label = { Text("Real FPS", fontSize = 10.sp, maxLines = 1) },
                                     modifier = Modifier.weight(1f).height(32.dp)
                                 )
                                 FilterChip(
                                     selected = overlayConfig.showFrameTimeMs,
-                                    onClick = { repository.updateFpsOverlayConfig(overlayConfig.copy(showFrameTimeMs = !overlayConfig.showFrameTimeMs)) },
+                                    onClick = {
+                                        haptics.tap()
+                                        repository.updateFpsOverlayConfig(overlayConfig.copy(showFrameTimeMs = !overlayConfig.showFrameTimeMs))
+                                    },
                                     label = { Text("Frame ms", fontSize = 10.sp, maxLines = 1) },
                                     modifier = Modifier.weight(1f).height(32.dp)
                                 )
@@ -3320,19 +3490,28 @@ fun FpsMonitorSection(
                             ) {
                                 FilterChip(
                                     selected = overlayConfig.showCpuTemp,
-                                    onClick = { repository.updateFpsOverlayConfig(overlayConfig.copy(showCpuTemp = !overlayConfig.showCpuTemp)) },
+                                    onClick = {
+                                        haptics.tap()
+                                        repository.updateFpsOverlayConfig(overlayConfig.copy(showCpuTemp = !overlayConfig.showCpuTemp))
+                                    },
                                     label = { Text("CPU Temp", fontSize = 10.sp, maxLines = 1) },
                                     modifier = Modifier.weight(1f).height(32.dp)
                                 )
                                 FilterChip(
                                     selected = overlayConfig.showBatTemp,
-                                    onClick = { repository.updateFpsOverlayConfig(overlayConfig.copy(showBatTemp = !overlayConfig.showBatTemp)) },
+                                    onClick = {
+                                        haptics.tap()
+                                        repository.updateFpsOverlayConfig(overlayConfig.copy(showBatTemp = !overlayConfig.showBatTemp))
+                                    },
                                     label = { Text("Bat Temp", fontSize = 10.sp, maxLines = 1) },
                                     modifier = Modifier.weight(1f).height(32.dp)
                                 )
                                 FilterChip(
                                     selected = overlayConfig.showGpuClock,
-                                    onClick = { repository.updateFpsOverlayConfig(overlayConfig.copy(showGpuClock = !overlayConfig.showGpuClock)) },
+                                    onClick = {
+                                        haptics.tap()
+                                        repository.updateFpsOverlayConfig(overlayConfig.copy(showGpuClock = !overlayConfig.showGpuClock))
+                                    },
                                     label = { Text("GPU MHz", fontSize = 10.sp, maxLines = 1) },
                                     modifier = Modifier.weight(1f).height(32.dp)
                                 )
@@ -3449,6 +3628,7 @@ fun RecordedFpsFileListItem(
     onSaveJpg: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     val fileDateFmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.US) }
     val shortSlugFmt = remember { SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US) }
     val cleanApp = remember(session.appName) {
@@ -3462,7 +3642,10 @@ fun RecordedFpsFileListItem(
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
-            .clickable { onClick() }
+            .clickable {
+                haptics.tap()
+                onClick()
+            }
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -3524,7 +3707,10 @@ fun RecordedFpsFileListItem(
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(
-                onClick = onSaveJpg,
+                onClick = {
+                    haptics.confirm()
+                    onSaveJpg()
+                },
                 modifier = Modifier.size(28.dp)
             ) {
                 Icon(
@@ -3535,7 +3721,10 @@ fun RecordedFpsFileListItem(
                 )
             }
             IconButton(
-                onClick = onDelete,
+                onClick = {
+                    haptics.warning()
+                    onDelete()
+                },
                 modifier = Modifier.size(28.dp)
             ) {
                 Icon(
@@ -3572,6 +3761,7 @@ fun RecordedFpsDetailsDialog(
     onExportCsv: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US) }
     var summaryPage by remember { mutableStateOf(0) } // 0 = Page 1 (from screenshot), 1 = Page 2 (1% Low / Jank / GPU)
 
@@ -3667,7 +3857,10 @@ fun RecordedFpsDetailsDialog(
                     modifier = Modifier.weight(1f)
                 ) {
                     IconButton(
-                        onClick = onDismiss,
+                        onClick = {
+                            haptics.tap()
+                            onDismiss()
+                        },
                         modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
@@ -3699,7 +3892,10 @@ fun RecordedFpsDetailsDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Button(
-                        onClick = { onSaveAsJpg(false) },
+                        onClick = {
+                            haptics.confirm()
+                            onSaveAsJpg(false)
+                        },
                         enabled = !isSavingJpg,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = chartBlue,
@@ -3723,7 +3919,10 @@ fun RecordedFpsDetailsDialog(
                     }
 
                     IconButton(
-                        onClick = { onSaveAsJpg(true) },
+                        onClick = {
+                            haptics.tap()
+                            onSaveAsJpg(true)
+                        },
                         modifier = Modifier
                             .size(34.dp)
                             .clip(RoundedCornerShape(10.dp))
@@ -3738,7 +3937,10 @@ fun RecordedFpsDetailsDialog(
                     }
 
                     IconButton(
-                        onClick = onDelete,
+                        onClick = {
+                            haptics.warning()
+                            onDelete()
+                        },
                         modifier = Modifier
                             .size(34.dp)
                             .clip(RoundedCornerShape(10.dp))
@@ -3773,7 +3975,10 @@ fun RecordedFpsDetailsDialog(
                         modifier = Modifier.weight(1f)
                     )
                     TextButton(
-                        onClick = { onSaveAsJpg(true) },
+                        onClick = {
+                            haptics.tap()
+                            onSaveAsJpg(true)
+                        },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                         modifier = Modifier.height(24.dp)
                     ) {
@@ -3795,7 +4000,10 @@ fun RecordedFpsDetailsDialog(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { summaryPage = if (summaryPage == 0) 1 else 0 },
+                            .clickable {
+                                haptics.tap()
+                                summaryPage = if (summaryPage == 0) 1 else 0
+                            },
                         shape = RoundedCornerShape(18.dp),
                         colors = CardDefaults.cardColors(containerColor = cardBg)
                     ) {
@@ -4104,7 +4312,10 @@ fun RecordedFpsDetailsDialog(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Button(
-                            onClick = { onSaveAsJpg(false) },
+                            onClick = {
+                                haptics.confirm()
+                                onSaveAsJpg(false)
+                            },
                             enabled = !isSavingJpg,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = chartBlue,
@@ -4123,7 +4334,10 @@ fun RecordedFpsDetailsDialog(
                         }
 
                         OutlinedButton(
-                            onClick = onExportCsv,
+                            onClick = {
+                                haptics.confirm()
+                                onExportCsv()
+                            },
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.weight(0.7f)
                         ) {

@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.testTag
 import com.example.data.repository.KernelRepository
+import com.example.ui.haptics.LocalDragonHaptics
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.SuccessGreen
@@ -35,6 +36,7 @@ import com.example.ui.theme.WarningOrange
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GpuScreen(repository: KernelRepository) {
+    val haptics = LocalDragonHaptics.current
     val gpuConfig by repository.gpuConfigFlow.collectAsState()
     var expandedGovDropdown by remember { mutableStateOf(false) }
     val animatedGpuProgress by animateFloatAsState(
@@ -77,7 +79,10 @@ fun GpuScreen(repository: KernelRepository) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     FilledTonalButton(
-                        onClick = { repository.resetGpuToDefaults() },
+                        onClick = {
+                            haptics.warning()
+                            repository.resetGpuToDefaults()
+                        },
                         shape = RoundedCornerShape(50),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                         modifier = Modifier
@@ -190,7 +195,10 @@ fun GpuScreen(repository: KernelRepository) {
                         Text("Devfreq Governor:", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                         Box {
                             OutlinedButton(
-                                onClick = { expandedGovDropdown = true },
+                                onClick = {
+                                    haptics.tap()
+                                    expandedGovDropdown = true
+                                },
                                 shape = RoundedCornerShape(10.dp),
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                                 modifier = Modifier.defaultMinSize(minHeight = 36.dp)
@@ -207,6 +215,7 @@ fun GpuScreen(repository: KernelRepository) {
                                     DropdownMenuItem(
                                         text = { Text(gov) },
                                         onClick = {
+                                            haptics.confirm()
                                             repository.updateGpuGovernor(gov)
                                             expandedGovDropdown = false
                                         }
@@ -236,7 +245,10 @@ fun GpuScreen(repository: KernelRepository) {
                         listOf(250, 450, 600, 750).forEach { freq ->
                             val isSelected = (gpuConfig.minFreqMhz == freq)
                             Button(
-                                onClick = { repository.updateGpuMinClock(freq) },
+                                onClick = {
+                                    haptics.tap()
+                                    repository.updateGpuMinClock(freq)
+                                },
                                 modifier = Modifier
                                     .weight(1f)
                                     .defaultMinSize(minHeight = 34.dp),
@@ -274,7 +286,10 @@ fun GpuScreen(repository: KernelRepository) {
                         gpuConfig.availableFrequenciesMhz.forEach { freq ->
                             val isSelected = (gpuConfig.maxFreqMhz == freq)
                             Button(
-                                onClick = { repository.updateGpuMaxClock(freq) },
+                                onClick = {
+                                    if (freq >= 1100) haptics.heavyAction() else haptics.confirm()
+                                    repository.updateGpuMaxClock(freq)
+                                },
                                 modifier = Modifier
                                     .weight(1f)
                                     .defaultMinSize(minHeight = 36.dp),
@@ -329,6 +344,7 @@ fun GpuScreen(repository: KernelRepository) {
                         Switch(
                             checked = gpuConfig.gpuBoostEnabled,
                             onCheckedChange = { enabled ->
+                                haptics.toggle(enabled)
                                 repository.updateGpuBoost(enabled, gpuConfig.gpuBoostLevel)
                             }
                         )
@@ -356,7 +372,10 @@ fun GpuScreen(repository: KernelRepository) {
                                 listOf("LOW", "MEDIUM", "DYNAMIC", "AGGRESSIVE").forEach { level ->
                                     val isSelected = gpuConfig.gpuBoostLevel == level
                                     Button(
-                                        onClick = { repository.updateGpuBoost(true, level) },
+                                        onClick = {
+                                            haptics.tap()
+                                            repository.updateGpuBoost(true, level)
+                                        },
                                         modifier = Modifier
                                             .weight(1f)
                                             .defaultMinSize(minHeight = 36.dp),
@@ -444,7 +463,10 @@ fun GpuScreen(repository: KernelRepository) {
                                     containerColor = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
                                     else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
                                 ),
-                                onClick = { repository.updateGpuPowerLevel(lvl) }
+                                onClick = {
+                                    haptics.tap()
+                                    repository.updateGpuPowerLevel(lvl)
+                                }
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -456,7 +478,10 @@ fun GpuScreen(repository: KernelRepository) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         RadioButton(
                                             selected = isSelected,
-                                            onClick = { repository.updateGpuPowerLevel(lvl) }
+                                            onClick = {
+                                                haptics.tap()
+                                                repository.updateGpuPowerLevel(lvl)
+                                            }
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Column {
@@ -559,9 +584,11 @@ fun GpuScreen(repository: KernelRepository) {
                             Slider(
                                 value = offsetSlider,
                                 onValueChange = { newVal ->
+                                    haptics.sliderTick()
                                     offsetSlider = newVal
                                 },
                                 onValueChangeFinished = {
+                                    haptics.confirm()
                                     repository.updateGpuVoltageOffset(freq, offsetSlider.toInt())
                                 },
                                 valueRange = -100f..30f,
@@ -624,7 +651,10 @@ fun GpuScreen(repository: KernelRepository) {
                     )
                     Spacer(modifier = Modifier.height(14.dp))
                     OutlinedButton(
-                        onClick = { repository.resetGpuToDefaults() },
+                        onClick = {
+                            haptics.warning()
+                            repository.resetGpuToDefaults()
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("btn_reset_gpu_defaults"),

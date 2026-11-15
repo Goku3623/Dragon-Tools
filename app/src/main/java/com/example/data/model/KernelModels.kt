@@ -409,6 +409,39 @@ data class CustomBatteryProfile(
     val suppressRomThermal: Boolean = true
 )
 
+const val INBUILT_PUGB_MOBILE_PROFILE_ID = "inbuilt_pugb_mobile_120fps"
+
+fun inbuiltPugbMobileProfile(): CustomBatteryProfile = CustomBatteryProfile(
+    id = INBUILT_PUGB_MOBILE_PROFILE_ID,
+    title = "PUGB Mobile",
+    description = "Constant 120 FPS UE4 Lock (SM8635) • X4 1900–3014 / A720 1824–2803 / A520 1324–2016 • Adreno 500–1100 MHz • WALT 1.5s Hold • 90% Bus & Joyose Bypass",
+    thermalLimitC = 48.0f,
+    socThermalLimitC = 95.0f,
+    gpuThermalLimitC = 90.0f,
+    silverMinFreqKhz = 1324800,
+    silverMaxFreqKhz = 2016000,
+    goldMinFreqKhz = 1824000,
+    goldMaxFreqKhz = 2803200,
+    primeMinFreqKhz = 1900800,
+    primeMaxFreqKhz = 3014400,
+    gpuMinFreqMhz = 500,
+    gpuMaxFreqMhz = 1100,
+    governor = "walt",
+    gpuGovernor = "msm-adreno-tz",
+    adrenoBoostVal = 3,
+    gpuPowerLevel = 0,
+    cpuBoostEnabled = true,
+    inputBoostEnabled = true,
+    cpuBoostDurationMs = 250,
+    cpuBoostGpuThreshold = 15,
+    waltDownRateLimitUs = 1500000,
+    uclampTopMinPct = 30,
+    uclampTopMaxPct = 100,
+    latencySensitive = true,
+    busScaleMode = "HIGH_90",
+    suppressRomThermal = true
+)
+
 data class AppBatteryProfileRule(
     val packageName: String,
     val appName: String,
@@ -965,6 +998,15 @@ enum class NotificationPanelStyle(
     )
 }
 
+enum class HapticIntensity(
+    val title: String,
+    val description: String
+) {
+    SUBTLE("Subtle", "Feather-light micro-ticks for quiet precision"),
+    BALANCED("Balanced", "Tactile M3 feedback on taps, toggles & confirmations"),
+    CRISP("Crisp", "Punchy gaming-grade physical detents")
+}
+
 data class ThemeCustomizationConfig(
     val primaryAccentIndex: Int = 10,
     val secondaryAccentIndex: Int = 11,
@@ -983,6 +1025,8 @@ data class ThemeCustomizationConfig(
     val liquidGlassRefraction: Float = 0.85f, // 0.20f .. 1.0f
     val liquidGlassWallpaperTint: String = "Frosted Ice", // Frosted Ice, Glacial Cyan, Polar Aurora, Deep Permafrost, Diamond Frost
     val activePresetName: String = "Material 3 You",
+    val hapticFeedbackEnabled: Boolean = true,
+    val hapticIntensity: HapticIntensity = HapticIntensity.BALANCED,
     val savedCustomPalettes: List<CustomColorPalette> = listOf(
         CustomColorPalette(
             id = "pal_cyber_neon",

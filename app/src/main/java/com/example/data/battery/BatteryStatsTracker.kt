@@ -100,6 +100,7 @@ class BatteryStatsTracker private constructor(private val context: Context) {
 
     @Volatile private var lastTickElapsedMs: Long = 0L
     @Volatile private var lastTickUptimeMs: Long = 0L
+    @Volatile private var lastSaveElapsedMs: Long = 0L
     @Volatile private var lastBatteryLevel: Int = -1
     @Volatile private var lastChargeCounterMah: Int = -1
     @Volatile private var lastIsInteractive: Boolean = true
@@ -180,6 +181,7 @@ class BatteryStatsTracker private constructor(private val context: Context) {
 
         lastTickElapsedMs = nowElapsed
         lastTickUptimeMs = nowUptime
+        lastSaveElapsedMs = nowElapsed
         lastIsInteractive = currentInteractive
     }
 
@@ -259,6 +261,12 @@ class BatteryStatsTracker private constructor(private val context: Context) {
             .putBoolean(KEY_LAST_INTERACTIVE, lastIsInteractive)
             .putBoolean(KEY_IS_USER_SESSION, isUserSessionActive)
             .apply()
+        lastSaveElapsedMs = SystemClock.elapsedRealtime()
+    }
+
+    @Synchronized
+    fun persistCheckpoint() {
+        savePersistedState()
     }
 
     fun isUserSessionActive(): Boolean = isUserSessionActive
@@ -440,7 +448,7 @@ class BatteryStatsTracker private constructor(private val context: Context) {
             lastChargeCounterMah = chargeCounterMah
         }
 
-        if (deltaElapsed > 5_000L) {
+        if ((nowElapsed - lastSaveElapsedMs) >= 5_000L) {
             savePersistedState()
         }
 

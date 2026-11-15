@@ -57,6 +57,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.example.R
 import com.example.data.repository.KernelRepository
 import com.example.data.visualstyle.*
+import com.example.ui.haptics.LocalDragonHaptics
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.ElectricViolet
@@ -82,6 +83,7 @@ fun VisualStyleScreen(
     val context = LocalContext.current
     val activity = context as? Activity
     val lifecycleOwner = LocalLifecycleOwner.current
+    val haptics = LocalDragonHaptics.current
     val manager = remember { repository.visualStyleManager }
 
     val presets by manager.presetsFlow.collectAsState()
@@ -220,16 +222,25 @@ fun VisualStyleScreen(
                 secondaryColor = secondaryColor,
                 headerGlow = themeCustomization.headerGlowIntensity,
                 onApplyClick = {
+                    haptics.confirm()
                     manager.applyVisualConfigurationToSystem(activity)
                     glSurfaceViewRef?.requestRender()
                 },
                 onResetClick = {
+                    haptics.warning()
                     manager.resetAllAdjustments(toNeutralDefault = false, activity = activity)
                     glSurfaceViewRef?.requestRender()
                 },
-                onCreatePresetClick = { showCreatePresetDialog = true },
-                onManageGameProfilesClick = { activeSection = VisualStyleSection.GAME_PROFILES },
+                onCreatePresetClick = {
+                    haptics.tap()
+                    showCreatePresetDialog = true
+                },
+                onManageGameProfilesClick = {
+                    haptics.tap()
+                    activeSection = VisualStyleSection.GAME_PROFILES
+                },
                 onToggleMiniFloating = { enabled ->
+                    haptics.toggle(enabled)
                     if (enabled && !Settings.canDrawOverlays(context)) {
                         try {
                             val intent = Intent(
@@ -242,9 +253,11 @@ fun VisualStyleScreen(
                     manager.setMiniFloatingEnabled(enabled)
                 },
                 onToggleOnlyInSelectedGames = { onlyInGames ->
+                    haptics.toggle(onlyInGames)
                     manager.setMiniFloatingOnlyInSelectedGames(onlyInGames)
                 },
                 onSelectTargetGamesClick = {
+                    haptics.tap()
                     manager.scanInstalledGamesAsync()
                     showSelectFloatingGamesDialog = true
                 }
@@ -267,18 +280,22 @@ fun VisualStyleScreen(
                 expensiveEffectsEnabled = expensiveEffectsEnabled,
                 primaryColor = primaryColor,
                 onToggleComparison = {
+                    haptics.tap()
                     comparisonEnabled = !comparisonEnabled
                     glSurfaceViewRef?.requestRender()
                 },
                 onSplitRatioChange = { ratio ->
+                    haptics.sliderTick()
                     splitRatio = ratio
                     glSurfaceViewRef?.requestRender()
                 },
                 onToggleHoldOriginal = {
+                    haptics.tap()
                     holdOriginal = !holdOriginal
                     glSurfaceViewRef?.requestRender()
                 },
                 onSelectScene = { scene ->
+                    haptics.tap()
                     if (scene == GamingPreviewScene.CUSTOM_IMAGE) {
                         photoPickerLauncher.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -290,11 +307,13 @@ fun VisualStyleScreen(
                     }
                 },
                 onPickCustomImage = {
+                    haptics.tap()
                     photoPickerLauncher.launch(
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
                 },
                 onToggleExpensiveEffects = { enabled ->
+                    haptics.toggle(enabled)
                     manager.setExpensiveEffectsEnabled(enabled)
                     glSurfaceViewRef?.requestRender()
                 }
@@ -314,7 +333,10 @@ fun VisualStyleScreen(
                     val selected = activeSection == sec
                     FilterChip(
                         selected = selected,
-                        onClick = { activeSection = sec },
+                        onClick = {
+                            haptics.tabSelect()
+                            activeSection = sec
+                        },
                         label = {
                             Text(
                                 text = sec.title,
@@ -354,10 +376,20 @@ fun VisualStyleScreen(
                 item(key = "preset_library_toolbar") {
                     PresetLibraryToolbar(
                         selectedFilter = presetFilter,
-                        onFilterChange = { presetFilter = it },
-                        onCreateCustomClick = { showCreatePresetDialog = true },
-                        onImportClick = { showImportJsonDialog = true },
+                        onFilterChange = {
+                            haptics.tap()
+                            presetFilter = it
+                        },
+                        onCreateCustomClick = {
+                            haptics.tap()
+                            showCreatePresetDialog = true
+                        },
+                        onImportClick = {
+                            haptics.tap()
+                            showImportJsonDialog = true
+                        },
                         onExportAllClick = {
+                            haptics.tap()
                             showExportJsonDialog = manager.exportPresetAsJson(null)
                         },
                         primaryColor = primaryColor
@@ -379,22 +411,34 @@ fun VisualStyleScreen(
                         isSelected = preset.id == activePresetId,
                         primaryColor = primaryColor,
                         onSelectAndApply = {
+                            haptics.confirm()
                             manager.selectPreset(preset, activity)
                             glSurfaceViewRef?.requestRender()
                         },
-                        onToggleFavorite = { manager.toggleFavoritePreset(preset.id) },
+                        onToggleFavorite = {
+                            haptics.tap()
+                            manager.toggleFavoritePreset(preset.id)
+                        },
                         onDuplicate = {
+                            haptics.tap()
                             manager.duplicatePreset(preset.id)
                             glSurfaceViewRef?.requestRender()
                         },
                         onExportJson = {
+                            haptics.tap()
                             showExportJsonDialog = manager.exportPresetAsJson(preset.id)
                         },
                         onRename = if (!preset.isBuiltIn) {
-                            { presetToRename = preset }
+                            {
+                                haptics.tap()
+                                presetToRename = preset
+                            }
                         } else null,
                         onDelete = if (!preset.isBuiltIn) {
-                            { manager.deleteCustomPreset(preset.id) }
+                            {
+                                haptics.warning()
+                                manager.deleteCustomPreset(preset.id)
+                            }
                         } else null
                     )
                 }
@@ -410,14 +454,25 @@ fun VisualStyleScreen(
                             manager.updateAdjustments(updated)
                         },
                         onResetAllToPreset = {
+                            haptics.warning()
                             manager.resetAllAdjustments(toNeutralDefault = false, activity = activity)
                         },
                         onResetAllToNeutral = {
+                            haptics.warning()
                             manager.resetAllAdjustments(toNeutralDefault = true, activity = activity)
                         },
-                        onSaveQuickSlot = { manager.saveQuickCustomSlot() },
-                        onRestoreQuickSlot = { manager.restoreQuickCustomSlot() },
-                        onSaveAsNewPreset = { showCreatePresetDialog = true }
+                        onSaveQuickSlot = {
+                            haptics.confirm()
+                            manager.saveQuickCustomSlot()
+                        },
+                        onRestoreQuickSlot = {
+                            haptics.tap()
+                            manager.restoreQuickCustomSlot()
+                        },
+                        onSaveAsNewPreset = {
+                            haptics.tap()
+                            showCreatePresetDialog = true
+                        }
                     )
                 }
             }
@@ -429,13 +484,18 @@ fun VisualStyleScreen(
                         activity = activity,
                         telemetry = displayTelemetry,
                         primaryColor = primaryColor,
-                        onRefreshTelemetry = { manager.refreshSystemDisplayTelemetry(activity) },
+                        onRefreshTelemetry = {
+                            haptics.tap()
+                            manager.refreshSystemDisplayTelemetry(activity)
+                        },
                         onSelectDisplayMode = { mode ->
+                            haptics.tap()
                             if (activity != null) {
                                 manager.applyPreferredDisplayMode(activity, mode)
                             }
                         },
                         onSelectWindowColorMode = { colorMode ->
+                            haptics.tap()
                             if (activity != null) {
                                 manager.applyWindowColorMode(activity, colorMode)
                             }
@@ -458,10 +518,15 @@ fun VisualStyleScreen(
                         lastDetectedFgPkg = lastDetectedFgPkg,
                         primaryColor = primaryColor,
                         onToggleAutoDetect = { enabled ->
+                            haptics.toggle(enabled)
                             manager.setForegroundAutoDetectEnabled(enabled)
                         },
-                        onAddProfileClick = { showAddGameProfileDialog = true },
+                        onAddProfileClick = {
+                            haptics.tap()
+                            showAddGameProfileDialog = true
+                        },
                         onRefreshGames = {
+                            haptics.tap()
                             manager.scanInstalledGamesAsync()
                             manager.refreshSystemDisplayTelemetry(activity)
                         }
@@ -503,7 +568,10 @@ fun VisualStyleScreen(
                                 )
                                 Spacer(modifier = Modifier.height(10.dp))
                                 Button(
-                                    onClick = { showAddGameProfileDialog = true },
+                                    onClick = {
+                                        haptics.tap()
+                                        showAddGameProfileDialog = true
+                                    },
                                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                                     modifier = Modifier
                                         .height(34.dp)
@@ -522,10 +590,12 @@ fun VisualStyleScreen(
                             profile = profile,
                             primaryColor = primaryColor,
                             onApplyNow = {
+                                haptics.confirm()
                                 manager.applyGameProfileNow(profile, activity)
                                 glSurfaceViewRef?.requestRender()
                             },
                             onDelete = {
+                                haptics.warning()
                                 manager.deleteGameProfile(profile.packageName)
                             }
                         )
@@ -647,6 +717,7 @@ private fun VisualStyleDashboardCard(
     onToggleOnlyInSelectedGames: (Boolean) -> Unit,
     onSelectTargetGamesClick: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var showFloatingOptions by remember { mutableStateOf(false) }
 
     Card(
@@ -887,7 +958,10 @@ private fun VisualStyleDashboardCard(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .weight(1f)
-                                .clickable { showFloatingOptions = !showFloatingOptions }
+                                .clickable {
+                                    haptics.tap()
+                                    showFloatingOptions = !showFloatingOptions
+                                }
                                 .testTag("dashboard_mini_floating_button")
                         ) {
                             Box(
@@ -991,6 +1065,7 @@ private fun VisualStyleDashboardCard(
                                 if (!canDrawOverlays) {
                                     Button(
                                         onClick = {
+                                            haptics.tap()
                                             try {
                                                 val intent = Intent(
                                                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -1010,6 +1085,7 @@ private fun VisualStyleDashboardCard(
                                 } else if (!hasUsageAccess) {
                                     OutlinedButton(
                                         onClick = {
+                                            haptics.tap()
                                             try {
                                                 val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
                                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -1086,6 +1162,7 @@ private fun BeforeAfterGlPreviewCard(
     onPickCustomImage: () -> Unit,
     onToggleExpensiveEffects: (Boolean) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var previewExpanded by remember { mutableStateOf(true) }
 
     Card(
@@ -1100,7 +1177,10 @@ private fun BeforeAfterGlPreviewCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { previewExpanded = !previewExpanded },
+                    .clickable {
+                        haptics.tap()
+                        previewExpanded = !previewExpanded
+                    },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1626,6 +1706,7 @@ private fun CustomAdjustmentsPanel(
     onRestoreQuickSlot: () -> Unit,
     onSaveAsNewPreset: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -1790,25 +1871,37 @@ private fun CustomAdjustmentsPanel(
             ) {
                 FilterChip(
                     selected = adjustments.enableGrayscale,
-                    onClick = { onUpdateAdjustments(adjustments.copy(enableGrayscale = !adjustments.enableGrayscale)) },
+                    onClick = {
+                        haptics.tap()
+                        onUpdateAdjustments(adjustments.copy(enableGrayscale = !adjustments.enableGrayscale))
+                    },
                     label = { Text("Grayscale", fontSize = 10.5.sp) },
                     modifier = Modifier.height(30.dp).testTag("filter_grayscale_chip")
                 )
                 FilterChip(
                     selected = adjustments.enableSepia,
-                    onClick = { onUpdateAdjustments(adjustments.copy(enableSepia = !adjustments.enableSepia)) },
+                    onClick = {
+                        haptics.tap()
+                        onUpdateAdjustments(adjustments.copy(enableSepia = !adjustments.enableSepia))
+                    },
                     label = { Text("Sepia", fontSize = 10.5.sp) },
                     modifier = Modifier.height(30.dp).testTag("filter_sepia_chip")
                 )
                 FilterChip(
                     selected = adjustments.enableInvert,
-                    onClick = { onUpdateAdjustments(adjustments.copy(enableInvert = !adjustments.enableInvert)) },
+                    onClick = {
+                        haptics.tap()
+                        onUpdateAdjustments(adjustments.copy(enableInvert = !adjustments.enableInvert))
+                    },
                     label = { Text("Invert", fontSize = 10.5.sp) },
                     modifier = Modifier.height(30.dp).testTag("filter_invert_chip")
                 )
                 FilterChip(
                     selected = adjustments.useCustomColorMatrix,
-                    onClick = { onUpdateAdjustments(adjustments.copy(useCustomColorMatrix = !adjustments.useCustomColorMatrix)) },
+                    onClick = {
+                        haptics.tap()
+                        onUpdateAdjustments(adjustments.copy(useCustomColorMatrix = !adjustments.useCustomColorMatrix))
+                    },
                     label = { Text("3×3 Matrix", fontSize = 10.5.sp) },
                     modifier = Modifier.height(30.dp).testTag("filter_custom_matrix_chip")
                 )
@@ -1828,6 +1921,7 @@ private fun CustomAdjustmentsPanel(
                 ) {
                     AssistChip(
                         onClick = {
+                            haptics.tap()
                             onUpdateAdjustments(adjustments.copy(customMatrixValues = listOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)))
                         },
                         label = { Text("Identity", fontSize = 10.sp) },
@@ -1835,6 +1929,7 @@ private fun CustomAdjustmentsPanel(
                     )
                     AssistChip(
                         onClick = {
+                            haptics.tap()
                             onUpdateAdjustments(
                                 adjustments.copy(
                                     customMatrixValues = listOf(1.18f, -0.08f, -0.05f, -0.06f, 1.15f, -0.06f, -0.04f, -0.08f, 1.22f)
@@ -1846,6 +1941,7 @@ private fun CustomAdjustmentsPanel(
                     )
                     AssistChip(
                         onClick = {
+                            haptics.tap()
                             onUpdateAdjustments(
                                 adjustments.copy(
                                     customMatrixValues = listOf(0.90f, 0.15f, 0.0f, 0.05f, 0.95f, 0.05f, 0.0f, 0.12f, 0.92f)
@@ -1857,6 +1953,7 @@ private fun CustomAdjustmentsPanel(
                     )
                     AssistChip(
                         onClick = {
+                            haptics.tap()
                             onUpdateAdjustments(
                                 adjustments.copy(
                                     customMatrixValues = listOf(1.05f, 0.12f, 0.0f, 0.08f, 0.92f, 0.0f, 0.0f, 0.05f, 1.10f)
@@ -1888,7 +1985,10 @@ private fun CustomAdjustmentsPanel(
                     val selected = adjustments.lutProfile == lut
                     FilterChip(
                         selected = selected,
-                        onClick = { onUpdateAdjustments(adjustments.copy(lutProfile = lut)) },
+                        onClick = {
+                            haptics.tap()
+                            onUpdateAdjustments(adjustments.copy(lutProfile = lut))
+                        },
                         label = { Text(lut.label, fontSize = 10.5.sp) },
                         modifier = Modifier.height(30.dp)
                     )
@@ -1972,6 +2072,7 @@ private fun AdjustmentSliderRow(
     testTag: String,
     onValueChange: (Float) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1994,7 +2095,10 @@ private fun AdjustmentSliderRow(
                 )
                 Spacer(modifier = Modifier.width(3.dp))
                 IconButton(
-                    onClick = { onValueChange(defaultValue) },
+                    onClick = {
+                        haptics.tap()
+                        onValueChange(defaultValue)
+                    },
                     modifier = Modifier.size(22.dp)
                 ) {
                     Icon(
@@ -2008,7 +2112,10 @@ private fun AdjustmentSliderRow(
         }
         Slider(
             value = value,
-            onValueChange = onValueChange,
+            onValueChange = {
+                haptics.sliderTick()
+                onValueChange(it)
+            },
             valueRange = valueRange,
             colors = SliderDefaults.colors(
                 thumbColor = accentColor,
@@ -2037,6 +2144,7 @@ private fun SystemDisplayIntegrationPanel(
     onSelectWindowColorMode: (TargetWindowColorMode) -> Unit,
     onChangeBrightness: (Int) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var brightnessSliderVal by remember(telemetry.systemBrightnessPercent) {
         mutableStateOf(telemetry.systemBrightnessPercent.toFloat())
     }
@@ -2197,6 +2305,7 @@ private fun SystemDisplayIntegrationPanel(
             Slider(
                 value = brightnessSliderVal,
                 onValueChange = {
+                    haptics.sliderTick()
                     brightnessSliderVal = it
                     onChangeBrightness(it.roundToInt())
                 },
@@ -2207,6 +2316,7 @@ private fun SystemDisplayIntegrationPanel(
             if (!telemetry.canWriteSystemSettings && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 OutlinedButton(
                     onClick = {
+                        haptics.tap()
                         try {
                             val intent = Intent(
                                 Settings.ACTION_MANAGE_WRITE_SETTINGS,
@@ -2279,6 +2389,7 @@ private fun PerGameProfilesHeaderCard(
     onAddProfileClick: () -> Unit,
     onRefreshGames: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -2353,6 +2464,7 @@ private fun PerGameProfilesHeaderCard(
             if (!hasUsageStatsPermission) {
                 OutlinedButton(
                     onClick = {
+                        haptics.tap()
                         try {
                             val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -2479,6 +2591,7 @@ private fun CreateCustomPresetDialog(
     onDismiss: () -> Unit,
     onCreate: (String, String) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var name by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
 
@@ -2511,7 +2624,10 @@ private fun CreateCustomPresetDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onCreate(name, description) },
+                onClick = {
+                    haptics.confirm()
+                    onCreate(name, description)
+                },
                 enabled = name.isNotBlank(),
                 modifier = Modifier.testTag("confirm_create_preset_button")
             ) {
@@ -2519,7 +2635,10 @@ private fun CreateCustomPresetDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = {
+                haptics.tap()
+                onDismiss()
+            }) { Text("Cancel") }
         }
     )
 }
@@ -2530,6 +2649,7 @@ private fun RenamePresetDialog(
     onDismiss: () -> Unit,
     onRename: (String) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var newName by remember(preset) { mutableStateOf(preset.name) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2545,14 +2665,20 @@ private fun RenamePresetDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onRename(newName) },
+                onClick = {
+                    haptics.confirm()
+                    onRename(newName)
+                },
                 enabled = newName.isNotBlank()
             ) {
                 Text("Rename")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = {
+                haptics.tap()
+                onDismiss()
+            }) { Text("Cancel") }
         }
     )
 }
@@ -2563,6 +2689,7 @@ private fun ExportPresetJsonDialog(
     onDismiss: () -> Unit,
     onCopyClipboard: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Export Preset JSON", fontWeight = FontWeight.Bold) },
@@ -2583,14 +2710,20 @@ private fun ExportPresetJsonDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onCopyClipboard) {
+            Button(onClick = {
+                haptics.confirm()
+                onCopyClipboard()
+            }) {
                 Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Copy to Clipboard")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
+            TextButton(onClick = {
+                haptics.tap()
+                onDismiss()
+            }) { Text("Close") }
         }
     )
 }
@@ -2600,6 +2733,7 @@ private fun ImportPresetJsonDialog(
     onDismiss: () -> Unit,
     onImport: (String) -> Result<Int>
 ) {
+    val haptics = LocalDragonHaptics.current
     var rawJson by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
@@ -2639,8 +2773,14 @@ private fun ImportPresetJsonDialog(
                 onClick = {
                     val res = onImport(rawJson)
                     res.fold(
-                        onSuccess = { onDismiss() },
-                        onFailure = { err -> errorMsg = err.message ?: "Invalid JSON" }
+                        onSuccess = {
+                            haptics.confirm()
+                            onDismiss()
+                        },
+                        onFailure = { err ->
+                            haptics.warning()
+                            errorMsg = err.message ?: "Invalid JSON"
+                        }
                     )
                 },
                 enabled = rawJson.isNotBlank()
@@ -2649,7 +2789,10 @@ private fun ImportPresetJsonDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = {
+                haptics.tap()
+                onDismiss()
+            }) { Text("Cancel") }
         }
     )
 }
@@ -2672,6 +2815,7 @@ private fun AddGameVisualProfileDialog(
         autoApply: Boolean
     ) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var selectedGameIndex by remember { mutableStateOf(0) }
     var manualPackageName by remember { mutableStateOf("") }
     var manualAppName by remember { mutableStateOf("") }
@@ -2706,6 +2850,7 @@ private fun AddGameVisualProfileDialog(
                             FilterChip(
                                 selected = selectedGameIndex == idx && manualPackageName.isBlank(),
                                 onClick = {
+                                    haptics.tap()
                                     selectedGameIndex = idx
                                     manualPackageName = ""
                                     manualAppName = ""
@@ -2739,7 +2884,10 @@ private fun AddGameVisualProfileDialog(
                     presets.forEach { preset ->
                         FilterChip(
                             selected = selectedPresetId == preset.id,
-                            onClick = { selectedPresetId = preset.id },
+                            onClick = {
+                                haptics.tap()
+                                selectedPresetId = preset.id
+                            },
                             label = { Text(preset.name, fontSize = 11.sp) }
                         )
                     }
@@ -2748,7 +2896,10 @@ private fun AddGameVisualProfileDialog(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(
                         checked = useCustomOverrides,
-                        onCheckedChange = { useCustomOverrides = it }
+                        onCheckedChange = {
+                            haptics.toggle(it)
+                            useCustomOverrides = it
+                        }
                     )
                     Text("Include Current Custom Slider Overrides", fontSize = 12.sp)
                 }
@@ -2756,7 +2907,10 @@ private fun AddGameVisualProfileDialog(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(
                         checked = overrideBrightness,
-                        onCheckedChange = { overrideBrightness = it }
+                        onCheckedChange = {
+                            haptics.toggle(it)
+                            overrideBrightness = it
+                        }
                     )
                     Text(
                         text = if (overrideBrightness) "Target Brightness: ${brightnessPct.roundToInt()}%" else "Keep Current Display Brightness",
@@ -2766,7 +2920,10 @@ private fun AddGameVisualProfileDialog(
                 if (overrideBrightness) {
                     Slider(
                         value = brightnessPct,
-                        onValueChange = { brightnessPct = it },
+                        onValueChange = {
+                            haptics.sliderTick()
+                            brightnessPct = it
+                        },
                         valueRange = 10f..100f
                     )
                 }
@@ -2775,6 +2932,7 @@ private fun AddGameVisualProfileDialog(
         confirmButton = {
             Button(
                 onClick = {
+                    haptics.confirm()
                     val chosenGame = installedGames.getOrNull(selectedGameIndex)
                     val finalPkg = manualPackageName.trim().ifEmpty {
                         chosenGame?.packageName ?: "com.gamestudio.custom"
@@ -2798,7 +2956,10 @@ private fun AddGameVisualProfileDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = {
+                haptics.tap()
+                onDismiss()
+            }) { Text("Cancel") }
         }
     )
 }
@@ -2813,6 +2974,7 @@ private fun SelectFloatingTargetGamesDialog(
     onSelectAll: (Collection<String>) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var searchQuery by remember { mutableStateOf("") }
     var customPkgInput by remember { mutableStateOf("") }
 
@@ -2897,6 +3059,7 @@ private fun SelectFloatingTargetGamesDialog(
                 ) {
                     OutlinedButton(
                         onClick = {
+                            haptics.tap()
                             val categorized = combinedList.filter { it.isCategorizedGame }.map { it.packageName }
                             val targets = if (categorized.isNotEmpty()) categorized else combinedList.take(10).map { it.packageName }
                             onSelectAll(selectedPackages + targets)
@@ -2906,7 +3069,10 @@ private fun SelectFloatingTargetGamesDialog(
                         Text("Select Detected Games", fontSize = 11.sp)
                     }
                     OutlinedButton(
-                        onClick = { onSelectAll(emptySet()) },
+                        onClick = {
+                            haptics.warning()
+                            onSelectAll(emptySet())
+                        },
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("Clear All", fontSize = 11.sp)
@@ -2930,6 +3096,7 @@ private fun SelectFloatingTargetGamesDialog(
                         onClick = {
                             val trimmed = customPkgInput.trim()
                             if (trimmed.isNotEmpty()) {
+                                haptics.confirm()
                                 if (!selectedPackages.contains(trimmed)) {
                                     onTogglePackage(trimmed)
                                 }
@@ -2952,7 +3119,10 @@ private fun SelectFloatingTargetGamesDialog(
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onTogglePackage(game.packageName) },
+                                .clickable {
+                                    haptics.toggle(!isChecked)
+                                    onTogglePackage(game.packageName)
+                                },
                             shape = RoundedCornerShape(10.dp),
                             color = if (isChecked) primaryColor.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                             border = BorderStroke(
@@ -2998,7 +3168,10 @@ private fun SelectFloatingTargetGamesDialog(
                                 }
                                 Checkbox(
                                     checked = isChecked,
-                                    onCheckedChange = { onTogglePackage(game.packageName) }
+                                    onCheckedChange = {
+                                        haptics.toggle(it)
+                                        onTogglePackage(game.packageName)
+                                    }
                                 )
                             }
                         }
@@ -3007,7 +3180,10 @@ private fun SelectFloatingTargetGamesDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onDismiss) {
+            Button(onClick = {
+                haptics.confirm()
+                onDismiss()
+            }) {
                 Text("Done (${selectedPackages.size} Selected)")
             }
         }

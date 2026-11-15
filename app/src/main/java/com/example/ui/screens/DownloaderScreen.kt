@@ -6,7 +6,9 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -51,6 +53,12 @@ import coil.compose.AsyncImage
 import com.example.data.downloader.WebViewMediaExtractor
 import com.example.data.model.*
 import com.example.data.repository.KernelRepository
+import com.example.ui.components.StartBatchDownloadPopupDialog
+import com.example.ui.components.StartDownloadPopupDialog
+import com.example.ui.components.hasStoragePermissionsForDownload
+import com.example.ui.components.openAppStoragePermissionSettings
+import com.example.ui.components.requiredStoragePermissionsForDownload
+import com.example.ui.haptics.LocalDragonHaptics
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.SuccessGreen
@@ -60,12 +68,17 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloaderScreen(
-    repository: KernelRepository
+    repository: KernelRepository,
+    onOpenBrowser: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val haptics = LocalDragonHaptics.current
     val downloadManager = remember { repository.downloadManager }
     val tasks by downloadManager.tasksFlow.collectAsState()
     val customBackendUrl by downloadManager.backendUrlFlow.collectAsState()
+    val maxConnections by downloadManager.maxConnectionsFlow.collectAsState()
+    val warpDnsEnabled by downloadManager.warpDnsEnabledFlow.collectAsState()
+    val warpDnsTelemetry by downloadManager.warpDnsTelemetryFlow.collectAsState()
 
     var urlInput by remember { mutableStateOf("") }
     var isFetching by remember { mutableStateOf(false) }
@@ -74,7 +87,7 @@ fun DownloaderScreen(
     var fetchErrorType by remember { mutableStateOf<DownloaderErrorType?>(null) }
     var fetchErrorMessage by remember { mutableStateOf<String?>(null) }
 
-    var isAudioOnlyMode by remember { mutableStateOf(false) }
+    var selectedFormatTab by remember { mutableStateOf("VIDEO") } // VIDEO, AUDIO, FILES
     var selectedFormatIndex by remember { mutableStateOf(0) }
     var qualityDropdownExpanded by remember { mutableStateOf(false) }
     var managerFilter by remember { mutableStateOf("ALL") } // ALL, DOWNLOADING, PROCESSING, COMPLETED, PAUSED, FAILED
@@ -86,6 +99,8 @@ fun DownloaderScreen(
     var showBackendConfigDialog by remember { mutableStateOf(false) }
     var showPrivateAuthDialog by remember { mutableStateOf(false) }
     var activeWebViewLoginPlatform by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var pendingPopupDownload by remember { mutableStateOf<Pair<MediaInfo, MediaFormatOption>?>(null) }
+    var pendingBatchUrlsPopup by remember { mutableStateOf<List<String>?>(null) }
 
     val webViewExtractor = remember { downloadManager.webViewExtractor }
     val restrictedBypassEnabled by webViewExtractor.restrictedBypassEnabled.collectAsState()
@@ -94,45 +109,25 @@ fun DownloaderScreen(
     val detectedPlatform = remember(urlInput) { MediaPlatform.detectFromUrl(urlInput) }
     val clipboardManager = remember { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
 
-    val requiredPermissions = remember {
-        buildList {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(Manifest.permission.READ_MEDIA_VIDEO)
-                add(Manifest.permission.READ_MEDIA_AUDIO)
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                add(Manifest.permission.READ_EXTERNAL_STORAGE)
-                if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
-                    add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                }
-            } else {
-                add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                add(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-        }.toTypedArray()
-    }
+    val requiredPermissions = remember { requiredStoragePermissionsForDownload() }
 
     var hasStoragePermissions by remember {
-        mutableStateOf(
-            requiredPermissions.all { perm ->
-                ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
-            }
-        )
+        mutableStateOf(hasStoragePermissionsForDownload(context))
     }
-
-    var pendingDownloadAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var didPromptPermissionsOnce by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { grantMap ->
-        hasStoragePermissions = grantMap.values.all { it } || requiredPermissions.all { perm ->
-            ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+        didPromptPermissionsOnce = true
+        hasStoragePermissions = grantMap.values.all { it } || hasStoragePermissionsForDownload(context)
+        if (hasStoragePermissions) {
+            downloadManager.ensureDragonToolDirectories()
         }
-        pendingDownloadAction?.invoke()
-        pendingDownloadAction = null
     }
 
     LaunchedEffect(Unit) {
+        downloadManager.ensureDragonToolDirectories()
         if (!hasStoragePermissions && requiredPermissions.isNotEmpty()) {
             permissionLauncher.launch(requiredPermissions)
         }
@@ -153,7 +148,13 @@ fun DownloaderScreen(
                     isFetching = false
                     if (info != null) {
                         mediaInfo = info
-                        isAudioOnlyMode = info.videoFormats.isEmpty() && info.audioFormats.isNotEmpty()
+                        selectedFormatTab = when {
+                            info.fileFormats.isNotEmpty() && info.videoFormats.isEmpty() && info.audioFormats.isEmpty() -> "FILES"
+                            info.videoFormats.isNotEmpty() -> "VIDEO"
+                            info.audioFormats.isNotEmpty() -> "AUDIO"
+                            info.fileFormats.isNotEmpty() -> "FILES"
+                            else -> "VIDEO"
+                        }
                         selectedFormatIndex = 0
                     } else {
                         mediaInfo = null
@@ -196,6 +197,34 @@ fun DownloaderScreen(
             onDismiss = {
                 webViewExtractor.notifyWebViewLoginCompleted()
                 activeWebViewLoginPlatform = null
+            }
+        )
+    }
+
+    pendingPopupDownload?.let { (dlInfo, dlFmt) ->
+        StartDownloadPopupDialog(
+            mediaInfo = dlInfo,
+            formatOption = dlFmt,
+            downloadManager = downloadManager,
+            maxConnections = maxConnections,
+            onDismiss = { pendingPopupDownload = null },
+            onDownloadStarted = { _, _ ->
+                hasStoragePermissions = hasStoragePermissionsForDownload(context)
+                pendingPopupDownload = null
+            }
+        )
+    }
+
+    pendingBatchUrlsPopup?.let { batchUrls ->
+        StartBatchDownloadPopupDialog(
+            urls = batchUrls,
+            config = batchConfig,
+            downloadManager = downloadManager,
+            onDismiss = { pendingBatchUrlsPopup = null },
+            onConfirmStart = {
+                hasStoragePermissions = hasStoragePermissionsForDownload(context)
+                downloadManager.startBatchDownload(batchUrls, batchConfig)
+                pendingBatchUrlsPopup = null
             }
         )
     }
@@ -258,14 +287,14 @@ fun DownloaderScreen(
                                 }
                                 Column {
                                     Text(
-                                        text = "UNIVERSAL AUDIO & VIDEO DOWNLOADER",
+                                        text = "UNIVERSAL IDM & MEDIA DOWNLOADER",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Black,
                                         letterSpacing = 0.8.sp,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
-                                        text = "Video: Download > Dragon Tools > Video • Audio: Download > Dragon Tools > Audio",
+                                        text = "Any Website • Any Format (Video, Audio, ZIP, APK, PDF, ISO) • ${maxConnections}x Multi-Thread",
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -274,7 +303,23 @@ fun DownloaderScreen(
 
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(
-                                    onClick = { showPrivateAuthDialog = true },
+                                    onClick = {
+                                        haptics.tap()
+                                        onOpenBrowser()
+                                    },
+                                    modifier = Modifier.testTag("downloader_open_browser_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Public,
+                                        contentDescription = "Open Dragon Browser (google.com)",
+                                        tint = NeonCyan
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        haptics.tap()
+                                        showPrivateAuthDialog = true
+                                    },
                                     modifier = Modifier.testTag("private_auth_button")
                                 ) {
                                     Icon(
@@ -284,7 +329,10 @@ fun DownloaderScreen(
                                     )
                                 }
                                 IconButton(
-                                    onClick = { showBackendConfigDialog = true },
+                                    onClick = {
+                                        haptics.tap()
+                                        showBackendConfigDialog = true
+                                    },
                                     modifier = Modifier.testTag("backend_config_button")
                                 ) {
                                     Icon(
@@ -303,7 +351,10 @@ fun DownloaderScreen(
                             border = BorderStroke(1.dp, SuccessGreen.copy(alpha = 0.4f)),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { showPrivateAuthDialog = true }
+                                .clickable {
+                                    haptics.tap()
+                                    showPrivateAuthDialog = true
+                                }
                                 .testTag("restricted_access_banner")
                         ) {
                             Row(
@@ -349,8 +400,16 @@ fun DownloaderScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    if (!hasStoragePermissions && requiredPermissions.isNotEmpty()) {
-                                        permissionLauncher.launch(requiredPermissions)
+                                    haptics.tap()
+                                    downloadManager.ensureDragonToolDirectories()
+                                    val nowGranted = hasStoragePermissionsForDownload(context)
+                                    hasStoragePermissions = nowGranted
+                                    if (!nowGranted && requiredPermissions.isNotEmpty()) {
+                                        if (didPromptPermissionsOnce) {
+                                            openAppStoragePermissionSettings(context)
+                                        } else {
+                                            permissionLauncher.launch(requiredPermissions)
+                                        }
                                     }
                                 }
                                 .testTag("storage_permission_banner")
@@ -372,7 +431,7 @@ fun DownloaderScreen(
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Text(
-                                        text = "Save Path: Internal Storage > Download > Dragon Tools > Video | Audio",
+                                        text = "Save Path: Downloads/DragonTool/Videos & Audio & Files",
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.onSurface
@@ -383,6 +442,102 @@ fun DownloaderScreen(
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (hasStoragePermissions) SuccessGreen else WarningOrange
+                                )
+                            }
+                        }
+
+                        // Cloudflare WARP DNS (1.1.1.1) Speed Booster Toggle Bar
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (warpDnsEnabled) WarningOrange.copy(alpha = 0.14f)
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.40f),
+                            border = BorderStroke(
+                                width = 1.dp,
+                                color = if (warpDnsEnabled) WarningOrange.copy(alpha = 0.55f)
+                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val next = !warpDnsEnabled
+                                    haptics.toggle(next)
+                                    downloadManager.setWarpDnsEnabled(next)
+                                }
+                                .testTag("downloader_warp_dns_toggle_card")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(
+                                                if (warpDnsEnabled) WarningOrange.copy(alpha = 0.22f)
+                                                else MaterialTheme.colorScheme.surface
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Bolt,
+                                            contentDescription = "Cloudflare WARP DNS",
+                                            tint = if (warpDnsEnabled) WarningOrange else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    Column {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "CLOUDFLARE WARP DNS (1.1.1.1)",
+                                                fontSize = 10.5.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = if (warpDnsEnabled) WarningOrange else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = if (warpDnsEnabled) SuccessGreen.copy(alpha = 0.20f)
+                                                else MaterialTheme.colorScheme.surface
+                                            ) {
+                                                Text(
+                                                    text = if (warpDnsEnabled) "ON • SPEED BOOST" else "OFF",
+                                                    fontSize = 8.5.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontWeight = FontWeight.Black,
+                                                    color = if (warpDnsEnabled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = if (warpDnsEnabled) {
+                                                "1.1.1.1 DoH + UDP • ${warpDnsTelemetry.lastLatencyMs}ms • ${warpDnsTelemetry.cacheHitCount} 0ms Thread Cache Hits"
+                                            } else {
+                                                "Tap to enable Cloudflare 1.1.1.1 DNS acceleration for faster downloads"
+                                            },
+                                            fontSize = 9.5.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                Switch(
+                                    checked = warpDnsEnabled,
+                                    onCheckedChange = { next ->
+                                        haptics.toggle(next)
+                                        downloadManager.setWarpDnsEnabled(next)
+                                    },
+                                    modifier = Modifier.testTag("downloader_warp_dns_switch")
                                 )
                             }
                         }
@@ -405,7 +560,11 @@ fun DownloaderScreen(
                                 MediaPlatform.REDDIT,
                                 MediaPlatform.PINTEREST,
                                 MediaPlatform.VIMEO,
-                                MediaPlatform.DIRECT
+                                MediaPlatform.PATREON,
+                                MediaPlatform.BILIBILI,
+                                MediaPlatform.PAWCHIVE,
+                                MediaPlatform.DIRECT,
+                                MediaPlatform.OTHER
                             ).forEach { plat ->
                                 val isDetected = urlInput.isNotBlank() && detectedPlatform == plat
                                 Surface(
@@ -474,7 +633,10 @@ fun DownloaderScreen(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(11.dp))
-                        .clickable { isBatchMode = false }
+                        .clickable {
+                            haptics.tabSelect()
+                            isBatchMode = false
+                        }
                         .testTag("mode_single_tab"),
                     color = if (!isBatchMode) MaterialTheme.colorScheme.primary else Color.Transparent,
                     shape = RoundedCornerShape(11.dp)
@@ -504,7 +666,10 @@ fun DownloaderScreen(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(11.dp))
-                        .clickable { isBatchMode = true }
+                        .clickable {
+                            haptics.tabSelect()
+                            isBatchMode = true
+                        }
                         .testTag("mode_batch_tab"),
                     color = if (isBatchMode) NeonCyan.copy(alpha = 0.85f) else Color.Transparent,
                     shape = RoundedCornerShape(11.dp)
@@ -606,7 +771,7 @@ fun DownloaderScreen(
                         },
                         placeholder = {
                             Text(
-                                text = "Paste YouTube, TikTok, Instagram, X, Reddit, or Direct MP4/MP3 link...",
+                                text = "Paste any website, YouTube, Patreon, or file link (.zip, .apk, .pdf, .iso, .mp4)...",
                                 fontSize = 12.sp
                             )
                         },
@@ -628,6 +793,7 @@ fun DownloaderScreen(
                                 if (urlInput.isNotEmpty()) {
                                     IconButton(
                                         onClick = {
+                                            haptics.tap()
                                             urlInput = ""
                                             mediaInfo = null
                                             fetchErrorType = null
@@ -644,6 +810,7 @@ fun DownloaderScreen(
                                 }
                                 IconButton(
                                     onClick = {
+                                        haptics.tap()
                                         val clip = clipboardManager.primaryClip
                                         if (clip != null && clip.itemCount > 0) {
                                             val pasted = clip.getItemAt(0).coerceToText(context)?.toString()?.trim() ?: ""
@@ -699,7 +866,10 @@ fun DownloaderScreen(
                                     )
                                 }
                                 TextButton(
-                                    onClick = { triggerFetch(urlInput) },
+                                    onClick = {
+                                        haptics.tap()
+                                        triggerFetch(urlInput)
+                                    },
                                     modifier = Modifier.testTag("retry_fetch_button")
                                 ) {
                                     Text("Retry", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
@@ -708,9 +878,95 @@ fun DownloaderScreen(
                         }
                     }
 
+                    // IDM Multi-Connection Accelerator Selector
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.28f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Bolt,
+                                        contentDescription = null,
+                                        tint = NeonCyan,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "IDM MULTI-CONNECTION ENGINE",
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = NeonCyan
+                                    )
+                                }
+                                Text(
+                                    text = if (warpDnsEnabled) "${maxConnections}x • WARP 1.1.1.1" else "${maxConnections}x Parallel Streams",
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SuccessGreen
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf(1, 4, 8, 12, 16).forEach { threads ->
+                                    val selected = maxConnections == threads
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (selected) NeonCyan.copy(alpha = 0.22f)
+                                        else MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                                        border = BorderStroke(
+                                            width = if (selected) 1.2.dp else 1.dp,
+                                            color = if (selected) NeonCyan else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                haptics.tap()
+                                                downloadManager.setMaxConnections(threads)
+                                            }
+                                            .testTag("idm_threads_$threads")
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.padding(vertical = 6.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "${threads}x",
+                                                fontSize = 11.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = if (selected) FontWeight.Black else FontWeight.SemiBold,
+                                                color = if (selected) NeonCyan else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Fetch Media Button
                     Button(
-                        onClick = { triggerFetch(urlInput) },
+                        onClick = {
+                            haptics.confirm()
+                            triggerFetch(urlInput)
+                        },
                         enabled = !isFetching,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -739,7 +995,7 @@ fun DownloaderScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Fetch Media",
+                                text = "Fetch Files & Media",
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 14.sp
                             )
@@ -757,11 +1013,17 @@ fun DownloaderScreen(
                 exit = fadeOut() + shrinkVertically()
             ) {
                 mediaInfo?.let { info ->
-                    var selectedCategoryFilter by remember(info.originalUrl, isAudioOnlyMode) {
+                    val isAudioMode = selectedFormatTab == "AUDIO"
+                    val isFilesMode = selectedFormatTab == "FILES"
+                    var selectedCategoryFilter by remember(info.originalUrl, selectedFormatTab) {
                         mutableStateOf("All")
                     }
-                    val allModeFormats = if (isAudioOnlyMode) info.audioFormats else info.videoFormats
-                    val categories = remember(allModeFormats, isAudioOnlyMode) {
+                    val allModeFormats = when (selectedFormatTab) {
+                        "AUDIO" -> info.audioFormats
+                        "FILES" -> info.fileFormats
+                        else -> info.videoFormats
+                    }
+                    val categories = remember(allModeFormats, selectedFormatTab) {
                         val cats = allModeFormats.mapNotNull { it.formatCategory.takeIf { c -> c.isNotBlank() } }.distinct()
                         listOf("All") + cats
                     }
@@ -847,7 +1109,11 @@ fun DownloaderScreen(
                                         )
                                     } else {
                                         Icon(
-                                            imageVector = if (isAudioOnlyMode) Icons.Default.Album else Icons.Default.Movie,
+                                            imageVector = when {
+                                                isFilesMode -> Icons.Default.InsertDriveFile
+                                                isAudioMode -> Icons.Default.Album
+                                                else -> Icons.Default.Movie
+                                            },
                                             contentDescription = null,
                                             tint = MaterialTheme.colorScheme.primary,
                                             modifier = Modifier.size(36.dp)
@@ -900,8 +1166,13 @@ fun DownloaderScreen(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
+                                    val countsSummary = buildList {
+                                        if (info.videoFormats.isNotEmpty()) add("${info.videoFormats.size} Video")
+                                        if (info.audioFormats.isNotEmpty()) add("${info.audioFormats.size} Audio")
+                                        if (info.fileFormats.isNotEmpty()) add("${info.fileFormats.size} Files")
+                                    }.joinToString(" • ").ifBlank { "No formats available" }
                                     Text(
-                                        text = "${info.videoFormats.size} Video • ${info.audioFormats.size} Audio formats available",
+                                        text = countsSummary,
                                         fontSize = 10.sp,
                                         fontFamily = FontFamily.Monospace,
                                         color = MaterialTheme.colorScheme.primary
@@ -909,22 +1180,23 @@ fun DownloaderScreen(
                                 }
                             }
 
-                            // Video / Audio Mode Switch
+                            // Video / Audio / Files Mode Switch
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
                                     .padding(4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                val videoSelected = !isAudioOnlyMode
+                                val videoSelected = selectedFormatTab == "VIDEO"
                                 Surface(
                                     modifier = Modifier
                                         .weight(1f)
                                         .clip(RoundedCornerShape(9.dp))
                                         .clickable(enabled = info.videoFormats.isNotEmpty()) {
-                                            isAudioOnlyMode = false
+                                            haptics.tabSelect()
+                                            selectedFormatTab = "VIDEO"
                                             selectedFormatIndex = 0
                                         }
                                         .testTag("mode_video_tab"),
@@ -932,33 +1204,40 @@ fun DownloaderScreen(
                                     shape = RoundedCornerShape(9.dp)
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(vertical = 9.dp),
+                                        modifier = Modifier.padding(vertical = 9.dp, horizontal = 4.dp),
                                         horizontalArrangement = Arrangement.Center,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Videocam,
                                             contentDescription = null,
-                                            tint = if (videoSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(16.dp)
+                                            tint = if (videoSelected) Color.White
+                                            else if (info.videoFormats.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(15.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
                                         Text(
-                                            text = "Video Formats (${info.videoFormats.size})",
-                                            fontSize = 12.sp,
+                                            text = "Video (${info.videoFormats.size})",
+                                            fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (videoSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = if (videoSelected) Color.White
+                                            else if (info.videoFormats.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                            else MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }
 
-                                val audioSelected = isAudioOnlyMode
+                                val audioSelected = selectedFormatTab == "AUDIO"
                                 Surface(
                                     modifier = Modifier
                                         .weight(1f)
                                         .clip(RoundedCornerShape(9.dp))
                                         .clickable(enabled = info.audioFormats.isNotEmpty()) {
-                                            isAudioOnlyMode = true
+                                            haptics.tabSelect()
+                                            selectedFormatTab = "AUDIO"
                                             selectedFormatIndex = 0
                                         }
                                         .testTag("mode_audio_tab"),
@@ -966,22 +1245,69 @@ fun DownloaderScreen(
                                     shape = RoundedCornerShape(9.dp)
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(vertical = 9.dp),
+                                        modifier = Modifier.padding(vertical = 9.dp, horizontal = 4.dp),
                                         horizontalArrangement = Arrangement.Center,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.GraphicEq,
                                             contentDescription = null,
-                                            tint = if (audioSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(16.dp)
+                                            tint = if (audioSelected) Color.White
+                                            else if (info.audioFormats.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(15.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
                                         Text(
-                                            text = "Audio Formats (${info.audioFormats.size})",
-                                            fontSize = 12.sp,
+                                            text = "Audio (${info.audioFormats.size})",
+                                            fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (audioSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = if (audioSelected) Color.White
+                                            else if (info.audioFormats.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                            else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                val filesSelected = selectedFormatTab == "FILES"
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(9.dp))
+                                        .clickable(enabled = info.fileFormats.isNotEmpty()) {
+                                            haptics.tabSelect()
+                                            selectedFormatTab = "FILES"
+                                            selectedFormatIndex = 0
+                                        }
+                                        .testTag("mode_files_tab"),
+                                    color = if (filesSelected) NeonCyan.copy(alpha = 0.88f) else Color.Transparent,
+                                    shape = RoundedCornerShape(9.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(vertical = 9.dp, horizontal = 4.dp),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.InsertDriveFile,
+                                            contentDescription = null,
+                                            tint = if (filesSelected) Color.Black
+                                            else if (info.fileFormats.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "Files (${info.fileFormats.size})",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = if (filesSelected) Color.Black
+                                            else if (info.fileFormats.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                            else MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }
@@ -1000,6 +1326,7 @@ fun DownloaderScreen(
                                         FilterChip(
                                             selected = isCatSelected,
                                             onClick = {
+                                                haptics.tap()
                                                 selectedCategoryFilter = cat
                                                 selectedFormatIndex = 0
                                             },
@@ -1031,8 +1358,11 @@ fun DownloaderScreen(
                                         readOnly = true,
                                         label = {
                                             Text(
-                                                if (isAudioOnlyMode) "Selected Audio Container, Bitrate & Sample Rate"
-                                                else "Selected Video Resolution, Container & Frame Rate"
+                                                when (selectedFormatTab) {
+                                                    "FILES" -> "Selected File Format, Category & Size"
+                                                    "AUDIO" -> "Selected Audio Container, Bitrate & Sample Rate"
+                                                    else -> "Selected Video Resolution, Container & Frame Rate"
+                                                }
                                             )
                                         },
                                         trailingIcon = {
@@ -1066,6 +1396,7 @@ fun DownloaderScreen(
                                                     }
                                                 },
                                                 onClick = {
+                                                    haptics.tap()
                                                     selectedFormatIndex = idx
                                                     qualityDropdownExpanded = false
                                                 }
@@ -1122,7 +1453,10 @@ fun DownloaderScreen(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clip(RoundedCornerShape(12.dp))
-                                                .clickable { selectedFormatIndex = idx }
+                                                .clickable {
+                                                    haptics.tap()
+                                                    selectedFormatIndex = idx
+                                                }
                                                 .border(
                                                     width = if (isSelected) 1.5.dp else 1.dp,
                                                     color = if (isSelected) MaterialTheme.colorScheme.primary
@@ -1146,7 +1480,10 @@ fun DownloaderScreen(
                                                 ) {
                                                     RadioButton(
                                                         selected = isSelected,
-                                                        onClick = { selectedFormatIndex = idx }
+                                                        onClick = {
+                                                            haptics.tap()
+                                                            selectedFormatIndex = idx
+                                                        }
                                                     )
                                                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                                         Row(
@@ -1191,7 +1528,21 @@ fun DownloaderScreen(
                                                                     )
                                                                 }
                                                             }
-                                                            if (!fmt.isAudioOnly && fmt.fps >= 60) {
+                                                            if (fmt.isGenericFile && fmt.fileCategoryLabel.isNotBlank()) {
+                                                                Surface(
+                                                                    shape = RoundedCornerShape(4.dp),
+                                                                    color = NeonCyan.copy(alpha = 0.16f)
+                                                                ) {
+                                                                    Text(
+                                                                        text = fmt.fileCategoryLabel.uppercase(Locale.US),
+                                                                        fontSize = 8.sp,
+                                                                        fontWeight = FontWeight.ExtraBold,
+                                                                        color = NeonCyan,
+                                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                                    )
+                                                                }
+                                                            }
+                                                            if (!fmt.isGenericFile && !fmt.isAudioOnly && fmt.fps >= 60) {
                                                                 Surface(
                                                                     shape = RoundedCornerShape(4.dp),
                                                                     color = NeonCyan.copy(alpha = 0.16f)
@@ -1255,21 +1606,11 @@ fun DownloaderScreen(
                                     }
                                 }
 
-                                // Start Download Button
+                                // Start Download Button (opens Start Download Pop-up Window)
                                 Button(
                                     onClick = {
-                                        val allGranted = requiredPermissions.all { perm ->
-                                            ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
-                                        }
-                                        hasStoragePermissions = allGranted
-                                        if (!allGranted && requiredPermissions.isNotEmpty()) {
-                                            pendingDownloadAction = {
-                                                downloadManager.startDownload(info, selectedFormat)
-                                            }
-                                            permissionLauncher.launch(requiredPermissions)
-                                        } else {
-                                            downloadManager.startDownload(info, selectedFormat)
-                                        }
+                                        haptics.confirm()
+                                        pendingPopupDownload = info to selectedFormat
                                     },
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -1286,10 +1627,10 @@ fun DownloaderScreen(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = if (isAudioOnlyMode) {
-                                            "Download Audio (${selectedFormat.container.uppercase(Locale.US)} • ${selectedFormat.bitrateKbps} kbps)"
-                                        } else {
-                                            "Download Video (${selectedFormat.resolutionHeight}p ${selectedFormat.container.uppercase(Locale.US)})"
+                                        text = when {
+                                            selectedFormat.isGenericFile -> "Download File (.${selectedFormat.container.uppercase(Locale.US)} • ${selectedFormat.formattedSize(info.durationSeconds)})"
+                                            selectedFormat.isAudioOnly -> "Download Audio (${selectedFormat.container.uppercase(Locale.US)} • ${selectedFormat.bitrateKbps} kbps)"
+                                            else -> "Download Video (${selectedFormat.resolutionHeight}p ${selectedFormat.container.uppercase(Locale.US)})"
                                         },
                                         fontWeight = FontWeight.ExtraBold,
                                         fontSize = 14.sp,
@@ -1316,14 +1657,7 @@ fun DownloaderScreen(
                     config = batchConfig,
                     onConfigChange = { batchConfig = it },
                     onStartBatch = { urls ->
-                        if (!hasStoragePermissions && requiredPermissions.isNotEmpty()) {
-                            pendingDownloadAction = {
-                                downloadManager.startBatchDownload(urls, batchConfig)
-                            }
-                            permissionLauncher.launch(requiredPermissions)
-                        } else {
-                            downloadManager.startBatchDownload(urls, batchConfig)
-                        }
+                        pendingBatchUrlsPopup = urls
                     },
                     hasStoragePermissions = hasStoragePermissions,
                     onRequestPermissions = {
@@ -1364,7 +1698,7 @@ fun DownloaderScreen(
                         )
                     }
                     Text(
-                        text = "Download/Dragon Tools/Video|Audio",
+                        text = "Downloads/DragonTool",
                         fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1390,7 +1724,10 @@ fun DownloaderScreen(
                     ).forEach { (key, label) ->
                         FilterChip(
                             selected = managerFilter == key,
-                            onClick = { managerFilter = key },
+                            onClick = {
+                                haptics.tabSelect()
+                                managerFilter = key
+                            },
                             label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
                         )
                     }
@@ -1401,7 +1738,7 @@ fun DownloaderScreen(
         val filteredTasks = tasks.filter { t ->
             when (managerFilter) {
                 "BATCH" -> t.batchSessionId != null
-                "DOWNLOADING" -> t.stage == DownloadStateStage.DOWNLOADING_VIDEO || t.stage == DownloadStateStage.DOWNLOADING_AUDIO
+                "DOWNLOADING" -> t.stage == DownloadStateStage.DOWNLOADING_VIDEO || t.stage == DownloadStateStage.DOWNLOADING_AUDIO || t.stage == DownloadStateStage.DOWNLOADING_FILE
                 "PROCESSING" -> t.stage == DownloadStateStage.MERGING_STREAMS || t.stage == DownloadStateStage.CONVERTING_MEDIA || t.stage == DownloadStateStage.VALIDATING_OUTPUT
                 "COMPLETED" -> t.stage == DownloadStateStage.COMPLETED
                 "PAUSED" -> t.stage == DownloadStateStage.PAUSED
@@ -1438,7 +1775,7 @@ fun DownloaderScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Paste a supported media link above to inspect streams and download verified MP4 or audio files.",
+                            text = "Paste any website link or file URL above to download verified videos, audio, or any file format with IDM acceleration.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1471,6 +1808,7 @@ private fun DownloadTaskCard(
     onOpen: () -> Unit,
     onShare: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     val statusColor = when (task.stage) {
         DownloadStateStage.COMPLETED -> SuccessGreen
         DownloadStateStage.FAILED -> DangerRed
@@ -1515,7 +1853,11 @@ private fun DownloadTaskCard(
                         )
                     } else {
                         Icon(
-                            imageVector = if (task.isAudioOnly) Icons.Default.AudioFile else Icons.Default.VideoFile,
+                            imageVector = when {
+                                task.isGenericFile -> Icons.Default.InsertDriveFile
+                                task.isAudioOnly -> Icons.Default.AudioFile
+                                else -> Icons.Default.VideoFile
+                            },
                             contentDescription = null,
                             tint = statusColor,
                             modifier = Modifier.size(28.dp)
@@ -1567,6 +1909,21 @@ private fun DownloadTaskCard(
                             overflow = TextOverflow.Ellipsis,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        if (task.activeConnections > 1) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = SuccessGreen.copy(alpha = 0.16f),
+                                border = BorderStroke(1.dp, SuccessGreen.copy(alpha = 0.5f))
+                            ) {
+                                Text(
+                                    text = "IDM ${task.activeConnections}x",
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = SuccessGreen,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
                         if (task.batchSessionId != null) {
                             Surface(
                                 shape = RoundedCornerShape(4.dp),
@@ -1585,10 +1942,10 @@ private fun DownloadTaskCard(
                     }
 
                     // Size & Speed / Verified Details
-                    val targetSaveFolder = if (task.isAudioOnly) {
-                        "Internal Storage > Download > Dragon Tools > Audio"
-                    } else {
-                        "Internal Storage > Download > Dragon Tools > Video"
+                    val targetSaveFolder = when {
+                        task.isGenericFile -> "Downloads/DragonTool/Files"
+                        task.isAudioOnly -> "Downloads/DragonTool/Audio"
+                        else -> "Downloads/DragonTool/Videos"
                     }
                     Text(
                         text = targetSaveFolder,
@@ -1662,6 +2019,54 @@ private fun DownloadTaskCard(
                             color = statusColor
                         )
                     }
+
+                    // Live IDM Multi-Segment Chunk Bar
+                    if (task.segmentProgress.size > 1) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "IDM ${task.segmentProgress.size}-Segment Parallel Stream",
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = NeonCyan
+                            )
+                            Text(
+                                text = "${task.segmentProgress.count { it >= 0.999f }}/${task.segmentProgress.size} chunks",
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            task.segmentProgress.forEach { segFrac ->
+                                val clamped = segFrac.coerceIn(0f, 1f)
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(5.dp)
+                                        .clip(RoundedCornerShape(2.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .fillMaxWidth(clamped)
+                                            .background(if (clamped >= 0.999f) SuccessGreen else NeonCyan)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1689,10 +2094,14 @@ private fun DownloadTaskCard(
             ) {
                 when (task.stage) {
                     DownloadStateStage.DOWNLOADING_VIDEO,
-                    DownloadStateStage.DOWNLOADING_AUDIO -> {
+                    DownloadStateStage.DOWNLOADING_AUDIO,
+                    DownloadStateStage.DOWNLOADING_FILE -> {
                         if (task.supportsPauseResume) {
                             OutlinedButton(
-                                onClick = onPause,
+                                onClick = {
+                                    haptics.tap()
+                                    onPause()
+                                },
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                                 modifier = Modifier.height(34.dp)
                             ) {
@@ -1705,7 +2114,10 @@ private fun DownloadTaskCard(
                     }
                     DownloadStateStage.PAUSED -> {
                         FilledTonalButton(
-                            onClick = onResume,
+                            onClick = {
+                                haptics.confirm()
+                                onResume()
+                            },
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                             modifier = Modifier.height(34.dp)
                         ) {
@@ -1717,7 +2129,10 @@ private fun DownloadTaskCard(
                     }
                     DownloadStateStage.FAILED -> {
                         FilledTonalButton(
-                            onClick = onRetry,
+                            onClick = {
+                                haptics.confirm()
+                                onRetry()
+                            },
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                             modifier = Modifier.height(34.dp)
                         ) {
@@ -1729,7 +2144,10 @@ private fun DownloadTaskCard(
                     }
                     DownloadStateStage.COMPLETED -> {
                         FilledTonalButton(
-                            onClick = onOpen,
+                            onClick = {
+                                haptics.tap()
+                                onOpen()
+                            },
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                             modifier = Modifier
                                 .height(34.dp)
@@ -1741,7 +2159,10 @@ private fun DownloadTaskCard(
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         OutlinedButton(
-                            onClick = onShare,
+                            onClick = {
+                                haptics.tap()
+                                onShare()
+                            },
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                             modifier = Modifier
                                 .height(34.dp)
@@ -1757,7 +2178,10 @@ private fun DownloadTaskCard(
                 }
 
                 IconButton(
-                    onClick = onCancel,
+                    onClick = {
+                        haptics.warning()
+                        onCancel()
+                    },
                     modifier = Modifier.size(34.dp)
                 ) {
                     Icon(
@@ -1778,6 +2202,7 @@ private fun BackendConfigDialog(
     onDismiss: () -> Unit,
     onSave: (String) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var input by remember { mutableStateOf(currentUrl) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1806,12 +2231,18 @@ private fun BackendConfigDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onSave(input) }) {
+            Button(onClick = {
+                haptics.confirm()
+                onSave(input)
+            }) {
                 Text("Save")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = {
+                haptics.tap()
+                onDismiss()
+            }) {
                 Text("Cancel")
             }
         }
@@ -1826,6 +2257,7 @@ private fun PrivateAccessSessionDialog(
     onDismiss: () -> Unit,
     onOpenWebViewLogin: (String, String) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var domainInput by remember { mutableStateOf("youtube.com") }
     var cookieInput by remember { mutableStateOf("") }
     val customCookies = remember(sessionCounter) { webViewExtractor.getAllCustomCookies() }
@@ -1869,7 +2301,10 @@ private fun PrivateAccessSessionDialog(
                     }
                     Switch(
                         checked = restrictedBypassEnabled,
-                        onCheckedChange = { webViewExtractor.setRestrictedBypassEnabled(it) }
+                        onCheckedChange = {
+                            haptics.toggle(it)
+                            webViewExtractor.setRestrictedBypassEnabled(it)
+                        }
                     )
                 }
 
@@ -1893,7 +2328,10 @@ private fun PrivateAccessSessionDialog(
                     Triple("Facebook", "https://m.facebook.com/login/", MediaPlatform.FACEBOOK),
                     Triple("TikTok", "https://www.tiktok.com/login", MediaPlatform.TIKTOK),
                     Triple("X (Twitter)", "https://x.com/i/flow/login", MediaPlatform.TWITTER),
-                    Triple("Reddit", "https://www.reddit.com/login/", MediaPlatform.REDDIT)
+                    Triple("Reddit", "https://www.reddit.com/login/", MediaPlatform.REDDIT),
+                    Triple("Patreon", "https://www.patreon.com/login", MediaPlatform.PATREON),
+                    Triple("Bilibili.tv", "https://www.bilibili.tv/", MediaPlatform.BILIBILI),
+                    Triple("Pawchive", "https://pawchive.pw/", MediaPlatform.PAWCHIVE)
                 )
 
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1905,7 +2343,10 @@ private fun PrivateAccessSessionDialog(
                             pair.forEach { (label, loginUrl, plat) ->
                                 val isSigned = remember(sessionCounter) { webViewExtractor.hasAuthenticatedSession(plat) }
                                 OutlinedButton(
-                                    onClick = { onOpenWebViewLogin(label, loginUrl) },
+                                    onClick = {
+                                        haptics.tap()
+                                        onOpenWebViewLogin(label, loginUrl)
+                                    },
                                     modifier = Modifier.weight(1f).height(36.dp),
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                 ) {
@@ -1962,6 +2403,7 @@ private fun PrivateAccessSessionDialog(
         confirmButton = {
             Button(
                 onClick = {
+                    haptics.confirm()
                     if (domainInput.isNotBlank() && cookieInput.isNotBlank()) {
                         webViewExtractor.setCustomCookieForDomain(domainInput, cookieInput)
                     }
@@ -1973,10 +2415,16 @@ private fun PrivateAccessSessionDialog(
         },
         dismissButton = {
             Row {
-                TextButton(onClick = { webViewExtractor.clearAllSessionData() }) {
+                TextButton(onClick = {
+                    haptics.warning()
+                    webViewExtractor.clearAllSessionData()
+                }) {
                     Text("Clear Cookies", color = DangerRed, fontSize = 11.sp)
                 }
-                TextButton(onClick = onDismiss) {
+                TextButton(onClick = {
+                    haptics.tap()
+                    onDismiss()
+                }) {
                     Text("Close", fontSize = 11.sp)
                 }
             }
@@ -1991,6 +2439,20 @@ private fun PlatformWebViewLoginDialog(
     loginUrl: String,
     onDismiss: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
+    var dialogWebView by remember { mutableStateOf<WebView?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            try {
+                dialogWebView?.stopLoading()
+                (dialogWebView?.parent as? ViewGroup)?.removeView(dialogWebView)
+                dialogWebView?.destroy()
+            } catch (_: Throwable) {}
+            dialogWebView = null
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -2004,7 +2466,10 @@ private fun PlatformWebViewLoginDialog(
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold
                 )
-                TextButton(onClick = onDismiss) {
+                TextButton(onClick = {
+                    haptics.tap()
+                    onDismiss()
+                }) {
                     Text("Done", fontWeight = FontWeight.Bold)
                 }
             }
@@ -2020,6 +2485,7 @@ private fun PlatformWebViewLoginDialog(
                 AndroidView(
                     factory = { ctx ->
                         WebView(ctx).apply {
+                            dialogWebView = this
                             val cm = CookieManager.getInstance()
                             cm.setAcceptCookie(true)
                             cm.setAcceptThirdPartyCookies(this, true)
@@ -2028,7 +2494,21 @@ private fun PlatformWebViewLoginDialog(
                             webViewClient = object : WebViewClient() {
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     super.onPageFinished(view, url)
-                                    CookieManager.getInstance().flush()
+                                    runCatching { CookieManager.getInstance().flush() }
+                                }
+
+                                override fun onRenderProcessGone(
+                                    view: WebView?,
+                                    detail: RenderProcessGoneDetail?
+                                ): Boolean {
+                                    try {
+                                        (view?.parent as? ViewGroup)?.removeView(view)
+                                        view?.destroy()
+                                    } catch (_: Throwable) {}
+                                    if (dialogWebView === view) {
+                                        dialogWebView = null
+                                    }
+                                    return true
                                 }
                             }
                             loadUrl(loginUrl)
@@ -2039,7 +2519,10 @@ private fun PlatformWebViewLoginDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onDismiss) {
+            Button(onClick = {
+                haptics.confirm()
+                onDismiss()
+            }) {
                 Text("Save Session & Return")
             }
         }
@@ -2061,6 +2544,9 @@ private fun platformIcon(platform: MediaPlatform): ImageVector {
         MediaPlatform.REDDIT -> Icons.Default.Forum
         MediaPlatform.PINTEREST -> Icons.Default.PushPin
         MediaPlatform.VIMEO -> Icons.Default.Hd
+        MediaPlatform.PATREON -> Icons.Default.WorkspacePremium
+        MediaPlatform.BILIBILI -> Icons.Default.LiveTv
+        MediaPlatform.PAWCHIVE -> Icons.Default.VideoLibrary
         MediaPlatform.DIRECT -> Icons.Default.FileDownload
         else -> Icons.Default.Public
     }
@@ -2077,6 +2563,7 @@ fun ActiveBatchSessionCard(
     isExpanded: Boolean,
     onToggleExpand: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     val overallProgress = if (session.totalCount > 0) {
         (session.completedCount.toFloat() / session.totalCount.toFloat()).coerceIn(0f, 1f)
     } else 0f
@@ -2233,7 +2720,10 @@ fun ActiveBatchSessionCard(
                 if (!session.isFinished && !session.isCancelled) {
                     if (session.isPaused) {
                         Button(
-                            onClick = onResume,
+                            onClick = {
+                                haptics.confirm()
+                                onResume()
+                            },
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("batch_resume_button"),
@@ -2246,7 +2736,10 @@ fun ActiveBatchSessionCard(
                         }
                     } else {
                         OutlinedButton(
-                            onClick = onPause,
+                            onClick = {
+                                haptics.tap()
+                                onPause()
+                            },
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("batch_pause_button"),
@@ -2259,7 +2752,10 @@ fun ActiveBatchSessionCard(
                     }
 
                     OutlinedButton(
-                        onClick = onCancel,
+                        onClick = {
+                            haptics.warning()
+                            onCancel()
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("batch_cancel_button"),
@@ -2274,7 +2770,10 @@ fun ActiveBatchSessionCard(
 
                 if (session.failedCount > 0) {
                     Button(
-                        onClick = onRetryFailed,
+                        onClick = {
+                            haptics.confirm()
+                            onRetryFailed()
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("batch_retry_failed_button"),
@@ -2289,7 +2788,10 @@ fun ActiveBatchSessionCard(
 
                 if (session.isFinished || session.isCancelled) {
                     OutlinedButton(
-                        onClick = onDismiss,
+                        onClick = {
+                            haptics.tap()
+                            onDismiss()
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("batch_dismiss_button"),
@@ -2307,7 +2809,10 @@ fun ActiveBatchSessionCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable { onToggleExpand() }
+                    .clickable {
+                        haptics.tap()
+                        onToggleExpand()
+                    }
                     .padding(vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -2429,6 +2934,7 @@ fun BatchInputAndConfigCard(
     clipboardManager: ClipboardManager,
     context: Context
 ) {
+    val haptics = LocalDragonHaptics.current
     val detectedUrls = remember(inputText) { extractUrlsFromText(inputText) }
     val platformCounts = remember(detectedUrls) {
         detectedUrls.groupingBy { MediaPlatform.detectFromUrl(it) }.eachCount()
@@ -2478,7 +2984,7 @@ fun BatchInputAndConfigCard(
             }
 
             Text(
-                text = "Paste multiple media links (YouTube, TikTok, Facebook, Instagram, Twitter/X, Reddit, or Direct MP4/MP3) to download simultaneously.",
+                text = "Paste multiple links (any website, video/audio platforms, or direct files like .zip, .apk, .pdf, .iso, .mp4) to download simultaneously with IDM acceleration.",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -2508,6 +3014,7 @@ fun BatchInputAndConfigCard(
             ) {
                 OutlinedButton(
                     onClick = {
+                        haptics.tap()
                         val clip = clipboardManager.primaryClip
                         if (clip != null && clip.itemCount > 0) {
                             val pasted = clip.getItemAt(0).coerceToText(context)?.toString()?.trim() ?: ""
@@ -2526,6 +3033,7 @@ fun BatchInputAndConfigCard(
 
                 Button(
                     onClick = {
+                        haptics.tap()
                         val sampleUrls = """
 https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4
 https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4
@@ -2545,7 +3053,10 @@ https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlaze
 
                 if (inputText.isNotBlank()) {
                     OutlinedButton(
-                        onClick = { onInputChange("") },
+                        onClick = {
+                            haptics.tap()
+                            onInputChange("")
+                        },
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(14.dp))
@@ -2616,7 +3127,10 @@ https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlaze
                             modifier = Modifier
                                 .weight(1f)
                                 .clip(RoundedCornerShape(9.dp))
-                                .clickable { onConfigChange(config.copy(downloadMode = mode)) },
+                                .clickable {
+                                    haptics.tap()
+                                    onConfigChange(config.copy(downloadMode = mode))
+                                },
                             color = if (isSel) MaterialTheme.colorScheme.primary else Color.Transparent,
                             shape = RoundedCornerShape(9.dp)
                         ) {
@@ -2660,7 +3174,10 @@ https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlaze
                         ).forEach { (res, label) ->
                             FilterChip(
                                 selected = config.preferredResolutionHeight == res,
-                                onClick = { onConfigChange(config.copy(preferredResolutionHeight = res)) },
+                                onClick = {
+                                    haptics.tap()
+                                    onConfigChange(config.copy(preferredResolutionHeight = res))
+                                },
                                 label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
                             )
                         }
@@ -2689,7 +3206,10 @@ https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlaze
                         ).forEach { (bitrate, label) ->
                             FilterChip(
                                 selected = config.preferredAudioBitrateKbps == bitrate,
-                                onClick = { onConfigChange(config.copy(preferredAudioBitrateKbps = bitrate)) },
+                                onClick = {
+                                    haptics.tap()
+                                    onConfigChange(config.copy(preferredAudioBitrateKbps = bitrate))
+                                },
                                 label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
                             )
                         }
@@ -2718,7 +3238,10 @@ https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlaze
                     ).forEach { (conc, label) ->
                         FilterChip(
                             selected = config.maxConcurrentDownloads == conc,
-                            onClick = { onConfigChange(config.copy(maxConcurrentDownloads = conc)) },
+                            onClick = {
+                                haptics.tap()
+                                onConfigChange(config.copy(maxConcurrentDownloads = conc))
+                            },
                             label = { Text(label, fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
                             modifier = Modifier.weight(1f)
                         )
@@ -2745,10 +3268,7 @@ https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlaze
                         modifier = Modifier.size(15.dp)
                     )
                     Text(
-                        text = if (config.downloadMode.isAudioOnly)
-                            "Target: Internal Storage > Download > Dragon Tools > Audio"
-                        else
-                            "Target: Internal Storage > Download > Dragon Tools > Video",
+                        text = "Target: Downloads/DragonTool/Videos, Audio & Files",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -2756,14 +3276,11 @@ https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlaze
                 }
             }
 
-            // Start Batch Download Button
+            // Start Batch Download Button (opens Batch Start Download Pop-up)
             Button(
                 onClick = {
-                    if (!hasStoragePermissions) {
-                        onRequestPermissions()
-                    } else {
-                        onStartBatch(detectedUrls)
-                    }
+                    haptics.confirm()
+                    onStartBatch(detectedUrls)
                 },
                 enabled = detectedUrls.isNotEmpty(),
                 shape = RoundedCornerShape(12.dp),

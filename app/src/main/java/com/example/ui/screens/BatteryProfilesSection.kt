@@ -30,11 +30,14 @@ import com.example.data.model.BatteryProfile
 import com.example.data.model.CpuCluster
 import com.example.data.model.CustomBatteryProfile
 import com.example.data.model.GpuConfig
+import com.example.data.model.INBUILT_PUGB_MOBILE_PROFILE_ID
 import com.example.data.model.PerAppProfileConfig
 import com.example.data.model.ThermalControlConfig
 import com.example.data.model.ThermalSensorSource
 import com.example.data.model.ThermalThrottlingPolicy
+import com.example.data.model.inbuiltPugbMobileProfile
 import com.example.data.repository.KernelRepository
+import com.example.ui.haptics.LocalDragonHaptics
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.SuccessGreen
@@ -254,6 +257,7 @@ fun LazyListScope.pocoF6BatteryProfilesTabItems(
         items = BatteryProfile.entries.toList(),
         key = { "poco_f6_profile_${it.name}" }
     ) { profile ->
+        val haptics = LocalDragonHaptics.current
         val isSelected = activeCustomProfile == null && activeProfile == profile
         val accent = profileAccentColor(profile, false)
 
@@ -261,7 +265,10 @@ fun LazyListScope.pocoF6BatteryProfilesTabItems(
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("battery_profile_${profile.name.lowercase()}")
-                .clickable { repository.setBatteryProfile(profile) },
+                .clickable {
+                    haptics.confirm()
+                    repository.setBatteryProfile(profile)
+                },
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(
                 containerColor = if (isSelected)
@@ -374,7 +381,10 @@ fun LazyListScope.pocoF6BatteryProfilesTabItems(
                     }
                 } else {
                     OutlinedButton(
-                        onClick = { repository.setBatteryProfile(profile) },
+                        onClick = {
+                            haptics.confirm()
+                            repository.setBatteryProfile(profile)
+                        },
                         contentPadding = PaddingValues(horizontal = 9.dp, vertical = 2.dp),
                         modifier = Modifier.height(28.dp),
                         shape = RoundedCornerShape(7.dp)
@@ -413,6 +423,7 @@ private fun PocoF6CustomProfileBuilderCard(
     customProfiles: List<CustomBatteryProfile>,
     activeCustomProfile: CustomBatteryProfile?
 ) {
+    val haptics = LocalDragonHaptics.current
     var showCreator by remember { mutableStateOf(false) }
     var editingProfileId by remember { mutableStateOf<String?>(null) }
     var activeBuilderTab by remember { mutableIntStateOf(0) }
@@ -516,6 +527,21 @@ private fun PocoF6CustomProfileBuilderCard(
                 waltDownRateLimitUs = 150000; uclampTopMinPct = 4f; uclampTopMaxPct = 85f; latencySensitive = false
                 thermalLimitC = 38f; socThermalLimitC = 76f; gpuThermalLimitC = 74f; suppressRomThermal = true
             }
+            "PUGB Mobile" -> {
+                val p = inbuiltPugbMobileProfile()
+                if (editingProfileId == null) customTitle = p.title
+                primeMinMhz = (p.primeMinFreqKhz / 1000f); primeMaxMhz = (p.primeMaxFreqKhz / 1000f)
+                goldMinMhz = (p.goldMinFreqKhz / 1000f); goldMaxMhz = (p.goldMaxFreqKhz / 1000f)
+                silverMinMhz = (p.silverMinFreqKhz / 1000f); silverMaxMhz = (p.silverMaxFreqKhz / 1000f)
+                selectedGov = p.governor
+                gpuMinMhz = p.gpuMinFreqMhz.toFloat(); gpuMaxMhz = p.gpuMaxFreqMhz.toFloat()
+                selectedGpuGov = p.gpuGovernor; adrenoBoostVal = p.adrenoBoostVal; gpuPowerLevel = p.gpuPowerLevel; busScaleMode = p.busScaleMode
+                cpuBoostEnabled = p.cpuBoostEnabled; inputBoostEnabled = p.inputBoostEnabled
+                cpuBoostDurationMs = p.cpuBoostDurationMs.toFloat(); cpuBoostGpuThreshold = p.cpuBoostGpuThreshold.toFloat()
+                waltDownRateLimitUs = p.waltDownRateLimitUs; uclampTopMinPct = p.uclampTopMinPct.toFloat(); uclampTopMaxPct = p.uclampTopMaxPct.toFloat()
+                latencySensitive = p.latencySensitive
+                thermalLimitC = p.thermalLimitC; socThermalLimitC = p.socThermalLimitC; gpuThermalLimitC = p.gpuThermalLimitC; suppressRomThermal = p.suppressRomThermal
+            }
             "Max Benchmark" -> {
                 if (editingProfileId == null) customTitle = "Max Peak Unthrottled"
                 primeMinMhz = 2496f; primeMaxMhz = 3014f
@@ -557,6 +583,7 @@ private fun PocoF6CustomProfileBuilderCard(
                 }
                 FilledTonalButton(
                     onClick = {
+                        haptics.tap()
                         if (showCreator) {
                             showCreator = false
                             editingProfileId = null
@@ -590,6 +617,7 @@ private fun PocoF6CustomProfileBuilderCard(
                 Spacer(modifier = Modifier.height(10.dp))
                 customProfiles.forEach { cProf ->
                     val isActive = activeCustomProfile?.id == cProf.id
+                    val isInbuilt = cProf.id == INBUILT_PUGB_MOBILE_PROFILE_ID
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = if (isActive) NeonCyan.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
@@ -600,7 +628,11 @@ private fun PocoF6CustomProfileBuilderCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 3.dp)
-                            .clickable { repository.setCustomBatteryProfile(cProf) }
+                            .testTag("custom_profile_card_${cProf.id}")
+                            .clickable {
+                                haptics.confirm()
+                                repository.setCustomBatteryProfile(cProf)
+                            }
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
@@ -615,8 +647,15 @@ private fun PocoF6CustomProfileBuilderCard(
                                         fontSize = 13.sp,
                                         color = if (isActive) NeonCyan else MaterialTheme.colorScheme.onSurface,
                                         maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
                                     )
+                                    if (isInbuilt) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Badge(containerColor = WarningOrange.copy(alpha = 0.22f), contentColor = WarningOrange) {
+                                            Text("INBUILT • 120 FPS", fontSize = 8.sp, fontWeight = FontWeight.ExtraBold)
+                                        }
+                                    }
                                     if (isActive) {
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Badge(containerColor = NeonCyan, contentColor = Color.Black) {
@@ -643,8 +682,13 @@ private fun PocoF6CustomProfileBuilderCard(
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(
-                                    onClick = { loadIntoEditor(cProf) },
-                                    modifier = Modifier.size(40.dp)
+                                    onClick = {
+                                        haptics.tap()
+                                        loadIntoEditor(cProf)
+                                    },
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("edit_custom_profile_${cProf.id}")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Edit,
@@ -655,13 +699,16 @@ private fun PocoF6CustomProfileBuilderCard(
                                 }
                                 IconButton(
                                     onClick = {
+                                        haptics.warning()
                                         if (editingProfileId == cProf.id) {
                                             editingProfileId = null
                                             showCreator = false
                                         }
                                         repository.deleteCustomProfile(cProf.id)
                                     },
-                                    modifier = Modifier.size(40.dp)
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("delete_custom_profile_${cProf.id}")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.DeleteOutline,
@@ -710,10 +757,14 @@ private fun PocoF6CustomProfileBuilderCard(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        listOf("Daily Balanced", "Sustained Gaming", "Battery Saver", "Max Benchmark").forEach { tpl ->
+                        listOf("PUGB Mobile", "Daily Balanced", "Sustained Gaming", "Battery Saver", "Max Benchmark").forEach { tpl ->
                             SuggestionChip(
-                                onClick = { applyPresetTemplate(tpl) },
-                                label = { Text(tpl, fontSize = 10.sp, fontWeight = FontWeight.SemiBold) }
+                                onClick = {
+                                    haptics.tap()
+                                    applyPresetTemplate(tpl)
+                                },
+                                label = { Text(tpl, fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
+                                modifier = Modifier.testTag("custom_template_chip_${tpl.lowercase().replace(' ', '_')}")
                             )
                         }
                     }
@@ -728,7 +779,10 @@ private fun PocoF6CustomProfileBuilderCard(
                         listOf("CPU & Gov", "GPU & Bus", "WALT & Thermal").forEachIndexed { idx, label ->
                             Tab(
                                 selected = activeBuilderTab == idx,
-                                onClick = { activeBuilderTab = idx },
+                                onClick = {
+                                    haptics.tabSelect()
+                                    activeBuilderTab = idx
+                                },
                                 text = { Text(label, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
                             )
                         }
@@ -744,6 +798,7 @@ private fun PocoF6CustomProfileBuilderCard(
                                 Slider(
                                     value = primeMinMhz,
                                     onValueChange = {
+                                        haptics.sliderTick()
                                         primeMinMhz = it
                                         if (it > primeMaxMhz) primeMaxMhz = it
                                     },
@@ -756,6 +811,7 @@ private fun PocoF6CustomProfileBuilderCard(
                                 Slider(
                                     value = primeMaxMhz,
                                     onValueChange = {
+                                        haptics.sliderTick()
                                         primeMaxMhz = it
                                         if (it < primeMinMhz) primeMinMhz = it
                                     },
@@ -772,6 +828,7 @@ private fun PocoF6CustomProfileBuilderCard(
                                 Slider(
                                     value = goldMinMhz,
                                     onValueChange = {
+                                        haptics.sliderTick()
                                         goldMinMhz = it
                                         if (it > goldMaxMhz) goldMaxMhz = it
                                     },
@@ -784,6 +841,7 @@ private fun PocoF6CustomProfileBuilderCard(
                                 Slider(
                                     value = goldMaxMhz,
                                     onValueChange = {
+                                        haptics.sliderTick()
                                         goldMaxMhz = it
                                         if (it < goldMinMhz) goldMinMhz = it
                                     },
@@ -800,6 +858,7 @@ private fun PocoF6CustomProfileBuilderCard(
                                 Slider(
                                     value = silverMinMhz,
                                     onValueChange = {
+                                        haptics.sliderTick()
                                         silverMinMhz = it
                                         if (it > silverMaxMhz) silverMaxMhz = it
                                     },
@@ -812,6 +871,7 @@ private fun PocoF6CustomProfileBuilderCard(
                                 Slider(
                                     value = silverMaxMhz,
                                     onValueChange = {
+                                        haptics.sliderTick()
                                         silverMaxMhz = it
                                         if (it < silverMinMhz) silverMinMhz = it
                                     },
@@ -829,7 +889,10 @@ private fun PocoF6CustomProfileBuilderCard(
                                 listOf("walt", "schedutil", "performance", "powersave").forEach { gov ->
                                     FilterChip(
                                         selected = selectedGov == gov,
-                                        onClick = { selectedGov = gov },
+                                        onClick = {
+                                            haptics.tap()
+                                            selectedGov = gov
+                                        },
                                         label = { Text(gov, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
                                     )
                                 }
@@ -843,6 +906,7 @@ private fun PocoF6CustomProfileBuilderCard(
                                 Slider(
                                     value = gpuMinMhz,
                                     onValueChange = {
+                                        haptics.sliderTick()
                                         gpuMinMhz = it
                                         if (it > gpuMaxMhz) gpuMaxMhz = it
                                     },
@@ -856,6 +920,7 @@ private fun PocoF6CustomProfileBuilderCard(
                                 Slider(
                                     value = gpuMaxMhz,
                                     onValueChange = {
+                                        haptics.sliderTick()
                                         gpuMaxMhz = it
                                         if (it < gpuMinMhz) gpuMinMhz = it
                                     },
@@ -874,7 +939,10 @@ private fun PocoF6CustomProfileBuilderCard(
                                 listOf("msm-adreno-tz", "performance", "simple_ondemand", "powersave").forEach { gGov ->
                                     FilterChip(
                                         selected = selectedGpuGov == gGov,
-                                        onClick = { selectedGpuGov = gGov },
+                                        onClick = {
+                                            haptics.tap()
+                                            selectedGpuGov = gGov
+                                        },
                                         label = { Text(gGov, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
                                     )
                                 }
@@ -886,7 +954,10 @@ private fun PocoF6CustomProfileBuilderCard(
                                 listOf(0 to "Off", 1 to "Low", 2 to "Med", 3 to "High").forEach { (lvl, lbl) ->
                                     FilterChip(
                                         selected = adrenoBoostVal == lvl,
-                                        onClick = { adrenoBoostVal = lvl },
+                                        onClick = {
+                                            haptics.tap()
+                                            adrenoBoostVal = lvl
+                                        },
                                         label = { Text(lbl, fontSize = 10.sp, fontWeight = FontWeight.Bold) },
                                         modifier = Modifier.weight(1f)
                                     )
@@ -899,7 +970,10 @@ private fun PocoF6CustomProfileBuilderCard(
                                 listOf(0 to "PL0 Peak", 1 to "PL1 High", 2 to "PL2 Mid", 3 to "PL3 Save").forEach { (pl, lbl) ->
                                     FilterChip(
                                         selected = gpuPowerLevel == pl,
-                                        onClick = { gpuPowerLevel = pl },
+                                        onClick = {
+                                            haptics.tap()
+                                            gpuPowerLevel = pl
+                                        },
                                         label = { Text(lbl, fontSize = 9.5.sp, fontWeight = FontWeight.Bold) },
                                         modifier = Modifier.weight(1f)
                                     )
@@ -912,7 +986,10 @@ private fun PocoF6CustomProfileBuilderCard(
                                 listOf("DYNAMIC" to "Dynamic", "RESPONSIVE_75" to "Fast 75%", "HIGH_90" to "Beast 90%").forEach { (mode, lbl) ->
                                     FilterChip(
                                         selected = busScaleMode == mode,
-                                        onClick = { busScaleMode = mode },
+                                        onClick = {
+                                            haptics.tap()
+                                            busScaleMode = mode
+                                        },
                                         label = { Text(lbl, fontSize = 10.sp, fontWeight = FontWeight.Bold) },
                                         modifier = Modifier.weight(1f)
                                     )
@@ -930,7 +1007,10 @@ private fun PocoF6CustomProfileBuilderCard(
                                     Text("CPUFreq & Adreno CPU Boost", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     Text("Enables SM8635 turbo OPP & frame-load CPU assist", fontSize = 9.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                Switch(checked = cpuBoostEnabled, onCheckedChange = { cpuBoostEnabled = it })
+                                Switch(checked = cpuBoostEnabled, onCheckedChange = {
+                                    haptics.toggle(it)
+                                    cpuBoostEnabled = it
+                                })
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -941,7 +1021,10 @@ private fun PocoF6CustomProfileBuilderCard(
                                     Text("WALT Input / Touch Boost", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     Text("Instant ramp on touch/scroll for zero-jank UI", fontSize = 9.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                Switch(checked = inputBoostEnabled, onCheckedChange = { inputBoostEnabled = it })
+                                Switch(checked = inputBoostEnabled, onCheckedChange = {
+                                    haptics.toggle(it)
+                                    inputBoostEnabled = it
+                                })
                             }
 
                             if (inputBoostEnabled || cpuBoostEnabled) {
@@ -949,13 +1032,19 @@ private fun PocoF6CustomProfileBuilderCard(
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Slider(
                                         value = cpuBoostDurationMs,
-                                        onValueChange = { cpuBoostDurationMs = it },
+                                        onValueChange = {
+                                            haptics.sliderTick()
+                                            cpuBoostDurationMs = it
+                                        },
                                         valueRange = 0f..350f,
                                         modifier = Modifier.weight(1f)
                                     )
                                     Slider(
                                         value = cpuBoostGpuThreshold,
-                                        onValueChange = { cpuBoostGpuThreshold = it },
+                                        onValueChange = {
+                                            haptics.sliderTick()
+                                            cpuBoostGpuThreshold = it
+                                        },
                                         valueRange = 5f..85f,
                                         modifier = Modifier.weight(1f)
                                     )
@@ -970,7 +1059,10 @@ private fun PocoF6CustomProfileBuilderCard(
                                 listOf(150000 to "150ms", 350000 to "350ms", 500000 to "500ms", 1000000 to "1.0s", 1500000 to "1.5s").forEach { (us, lbl) ->
                                     FilterChip(
                                         selected = waltDownRateLimitUs == us,
-                                        onClick = { waltDownRateLimitUs = us },
+                                        onClick = {
+                                            haptics.tap()
+                                            waltDownRateLimitUs = us
+                                        },
                                         label = { Text(lbl, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
                                     )
                                 }
@@ -981,7 +1073,10 @@ private fun PocoF6CustomProfileBuilderCard(
                                 Text("Min", fontSize = 9.5.sp, modifier = Modifier.width(26.dp))
                                 Slider(
                                     value = uclampTopMinPct,
-                                    onValueChange = { uclampTopMinPct = it },
+                                    onValueChange = {
+                                        haptics.sliderTick()
+                                        uclampTopMinPct = it
+                                    },
                                     valueRange = 0f..40f,
                                     modifier = Modifier.weight(1f)
                                 )
@@ -990,7 +1085,10 @@ private fun PocoF6CustomProfileBuilderCard(
                                 Text("Max", fontSize = 9.5.sp, modifier = Modifier.width(26.dp))
                                 Slider(
                                     value = uclampTopMaxPct,
-                                    onValueChange = { uclampTopMaxPct = it },
+                                    onValueChange = {
+                                        haptics.sliderTick()
+                                        uclampTopMaxPct = it
+                                    },
                                     valueRange = 50f..100f,
                                     modifier = Modifier.weight(1f)
                                 )
@@ -1005,16 +1103,28 @@ private fun PocoF6CustomProfileBuilderCard(
                                     Text("Top-App Latency Sensitive (EAS)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     Text("Prioritize Gold/Prime placement & 4096 cpu.shares", fontSize = 9.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                Switch(checked = latencySensitive, onCheckedChange = { latencySensitive = it })
+                                Switch(checked = latencySensitive, onCheckedChange = {
+                                    haptics.toggle(it)
+                                    latencySensitive = it
+                                })
                             }
 
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
                             Text("Thermal Caps: BAT ${thermalLimitC.toInt()}°C • SoC ${socThermalLimitC.toInt()}°C • GPU ${gpuThermalLimitC.toInt()}°C", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = WarningOrange)
-                            Slider(value = thermalLimitC, onValueChange = { thermalLimitC = it }, valueRange = 36f..50f, steps = 13)
+                            Slider(value = thermalLimitC, onValueChange = {
+                                haptics.sliderTick()
+                                thermalLimitC = it
+                            }, valueRange = 36f..50f, steps = 13)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Slider(value = socThermalLimitC, onValueChange = { socThermalLimitC = it }, valueRange = 70f..98f, modifier = Modifier.weight(1f))
-                                Slider(value = gpuThermalLimitC, onValueChange = { gpuThermalLimitC = it }, valueRange = 65f..95f, modifier = Modifier.weight(1f))
+                                Slider(value = socThermalLimitC, onValueChange = {
+                                    haptics.sliderTick()
+                                    socThermalLimitC = it
+                                }, valueRange = 70f..98f, modifier = Modifier.weight(1f))
+                                Slider(value = gpuThermalLimitC, onValueChange = {
+                                    haptics.sliderTick()
+                                    gpuThermalLimitC = it
+                                }, valueRange = 65f..95f, modifier = Modifier.weight(1f))
                             }
 
                             Row(
@@ -1026,7 +1136,10 @@ private fun PocoF6CustomProfileBuilderCard(
                                     Text("Bypass Premature ROM Thermal", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     Text("Locks sconfig=10 & stops ROM thermal HALs before your cap", fontSize = 9.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                Switch(checked = suppressRomThermal, onCheckedChange = { suppressRomThermal = it })
+                                Switch(checked = suppressRomThermal, onCheckedChange = {
+                                    haptics.toggle(it)
+                                    suppressRomThermal = it
+                                })
                             }
                         }
                     }
@@ -1034,6 +1147,7 @@ private fun PocoF6CustomProfileBuilderCard(
                     Spacer(modifier = Modifier.height(10.dp))
                     Button(
                         onClick = {
+                            haptics.confirm()
                             val cleanTitle = customTitle.trim().ifBlank { "Custom POCO F6" }
                             val pMinK = primeMinMhz.toInt() * 1000
                             val pMaxK = primeMaxMhz.toInt().coerceAtLeast(primeMinMhz.toInt()) * 1000
@@ -1135,6 +1249,7 @@ private fun PocoF6ThermalProfilerSyncCard(
     repository: KernelRepository,
     thermalControl: ThermalControlConfig
 ) {
+    val haptics = LocalDragonHaptics.current
     var showAdvancedThermal by remember { mutableStateOf(false) }
 
     val stageBadgeColor = when {
@@ -1197,7 +1312,10 @@ private fun PocoF6ThermalProfilerSyncCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Switch(
                     checked = thermalControl.syncWithBatteryProfiler,
-                    onCheckedChange = { repository.setThermalSyncWithProfiler(it) },
+                    onCheckedChange = {
+                        haptics.toggle(it)
+                        repository.setThermalSyncWithProfiler(it)
+                    },
                     modifier = Modifier.testTag("thermal_sync_with_profiler_switch")
                 )
             }
@@ -1289,7 +1407,10 @@ private fun PocoF6ThermalProfilerSyncCard(
                 }
                 Slider(
                     value = thermalControl.customThermalLimitC,
-                    onValueChange = { repository.setCustomThermalLimitC(it) },
+                    onValueChange = {
+                        haptics.sliderTick()
+                        repository.setCustomThermalLimitC(it)
+                    },
                     valueRange = 35f..48f,
                     steps = 25,
                     modifier = Modifier.testTag("custom_thermal_limit_slider")
@@ -1314,7 +1435,10 @@ private fun PocoF6ThermalProfilerSyncCard(
                                     .weight(1f)
                                     .heightIn(min = 48.dp)
                                     .clip(RoundedCornerShape(10.dp))
-                                    .clickable { repository.setThermalThrottlingPolicy(policy) }
+                                    .clickable {
+                                        haptics.tap()
+                                        repository.setThermalThrottlingPolicy(policy)
+                                    }
                                     .testTag("thermal_policy_${policy.name.lowercase()}"),
                                 shape = RoundedCornerShape(10.dp),
                                 color = if (selected) WarningOrange.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
@@ -1365,7 +1489,10 @@ private fun PocoF6ThermalProfilerSyncCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
-                    .clickable { showAdvancedThermal = !showAdvancedThermal }
+                    .clickable {
+                        haptics.tap()
+                        showAdvancedThermal = !showAdvancedThermal
+                    }
                     .padding(vertical = 6.dp)
                     .testTag("toggle_advanced_thermal_controls"),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1414,7 +1541,10 @@ private fun PocoF6ThermalProfilerSyncCard(
                                     .weight(1f)
                                     .heightIn(min = 48.dp)
                                     .clip(RoundedCornerShape(10.dp))
-                                    .clickable { repository.setThermalSensorSource(source) }
+                                    .clickable {
+                                        haptics.tap()
+                                        repository.setThermalSensorSource(source)
+                                    }
                                     .testTag("thermal_sensor_${source.name.lowercase()}"),
                                 shape = RoundedCornerShape(10.dp),
                                 color = if (isSelected) NeonCyan.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
@@ -1463,7 +1593,10 @@ private fun PocoF6ThermalProfilerSyncCard(
                     }
                     Slider(
                         value = thermalControl.cooldownHysteresisC,
-                        onValueChange = { repository.setThermalCooldownHysteresisC(it) },
+                        onValueChange = {
+                            haptics.sliderTick()
+                            repository.setThermalCooldownHysteresisC(it)
+                        },
                         valueRange = 0.5f..3.0f,
                         steps = 4,
                         modifier = Modifier.testTag("thermal_hysteresis_slider")
@@ -1567,6 +1700,7 @@ private fun ThermalHardwareOptionRow(
     testTag: String,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1586,7 +1720,10 @@ private fun ThermalHardwareOptionRow(
         }
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = {
+                haptics.toggle(it)
+                onCheckedChange(it)
+            },
             modifier = Modifier.testTag(testTag)
         )
     }
@@ -1608,6 +1745,7 @@ fun LazyListScope.pocoF6PerAppProfilesTabItems(
 ) {
     // 1. Per-App Profile Engine Master Card
     item(key = "per_app_engine_master_card") {
+        val haptics = LocalDragonHaptics.current
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
@@ -1658,7 +1796,10 @@ fun LazyListScope.pocoF6PerAppProfilesTabItems(
                     }
                     Switch(
                         checked = perAppConfig.isEnabled,
-                        onCheckedChange = { repository.togglePerAppProfilesEnabled(it) },
+                        onCheckedChange = {
+                            haptics.toggle(it)
+                            repository.togglePerAppProfilesEnabled(it)
+                        },
                         modifier = Modifier.testTag("per_app_profiles_master_switch")
                     )
                 }
@@ -1706,7 +1847,10 @@ fun LazyListScope.pocoF6PerAppProfilesTabItems(
                         }
                         if (!isAccessibilityEnabled) {
                             FilledTonalButton(
-                                onClick = { repository.grantAccessibilityViaRoot() },
+                                onClick = {
+                                    haptics.confirm()
+                                    repository.grantAccessibilityViaRoot()
+                                },
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
@@ -1741,7 +1885,10 @@ fun LazyListScope.pocoF6PerAppProfilesTabItems(
                         val isFb = perAppConfig.fallbackProfile == prof && perAppConfig.fallbackCustomProfileId == null
                         FilterChip(
                             selected = isFb,
-                            onClick = { repository.setPerAppFallbackProfile(prof) },
+                            onClick = {
+                                haptics.tap()
+                                repository.setPerAppFallbackProfile(prof)
+                            },
                             label = {
                                 Text(
                                     text = prof.title,
@@ -1757,7 +1904,10 @@ fun LazyListScope.pocoF6PerAppProfilesTabItems(
 
                 // 1-Tap Auto-Configure Installed Games Button
                 OutlinedButton(
-                    onClick = { repository.autoConfigureInstalledGamesForPocoF6() },
+                    onClick = {
+                        haptics.heavyAction()
+                        repository.autoConfigureInstalledGamesForPocoF6()
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("auto_configure_games_button"),
@@ -1778,6 +1928,7 @@ fun LazyListScope.pocoF6PerAppProfilesTabItems(
 
     // 2. Search & Filter Bar for Per-App Rules and Installed Apps
     item(key = "per_app_search_and_filters") {
+        val haptics = LocalDragonHaptics.current
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -1792,7 +1943,10 @@ fun LazyListScope.pocoF6PerAppProfilesTabItems(
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
                     trailingIcon = {
                         if (searchQuery.isNotBlank()) {
-                            IconButton(onClick = { onSearchQueryChange("") }) {
+                            IconButton(onClick = {
+                                haptics.tap()
+                                onSearchQueryChange("")
+                            }) {
                                 Icon(Icons.Default.Clear, contentDescription = "Clear")
                             }
                         }
@@ -1812,7 +1966,10 @@ fun LazyListScope.pocoF6PerAppProfilesTabItems(
                 ) {
                     FilterChip(
                         selected = selectedFilterTab == 0,
-                        onClick = { onSelectedFilterTabChange(0) },
+                        onClick = {
+                            haptics.tap()
+                            onSelectedFilterTabChange(0)
+                        },
                         label = {
                             Text(
                                 text = "Configured (${perAppConfig.rules.size})",
@@ -1824,7 +1981,10 @@ fun LazyListScope.pocoF6PerAppProfilesTabItems(
                     )
                     FilterChip(
                         selected = selectedFilterTab == 1,
-                        onClick = { onSelectedFilterTabChange(1) },
+                        onClick = {
+                            haptics.tap()
+                            onSelectedFilterTabChange(1)
+                        },
                         label = {
                             Text(
                                 text = "User Apps (${installedApps.count { !it.isSystem }})",
@@ -1836,7 +1996,10 @@ fun LazyListScope.pocoF6PerAppProfilesTabItems(
                     )
                     FilterChip(
                         selected = selectedFilterTab == 2,
-                        onClick = { onSelectedFilterTabChange(2) },
+                        onClick = {
+                            haptics.tap()
+                            onSelectedFilterTabChange(2)
+                        },
                         label = {
                             Text(
                                 text = "All Apps (${installedApps.size})",
@@ -1913,6 +2076,7 @@ private fun PerAppRuleItemCard(
     onSaveRule: (AppBatteryProfileRule) -> Unit,
     onRemoveRule: () -> Unit
 ) {
+    val haptics = LocalDragonHaptics.current
     var draftProfile by remember(existingRule) {
         mutableStateOf(existingRule?.profile ?: BatteryProfile.GAMING)
     }
@@ -1935,7 +2099,10 @@ private fun PerAppRuleItemCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onToggleExpand() },
+            .clickable {
+                haptics.tap()
+                onToggleExpand()
+            },
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (hasRule)
@@ -2054,6 +2221,7 @@ private fun PerAppRuleItemCard(
                             FilterChip(
                                 selected = draftCustomId == null && draftProfile == prof,
                                 onClick = {
+                                    haptics.tap()
                                     draftCustomId = null
                                     draftProfile = prof
                                 },
@@ -2066,6 +2234,7 @@ private fun PerAppRuleItemCard(
                             FilterChip(
                                 selected = draftCustomId == cProf.id,
                                 onClick = {
+                                    haptics.tap()
                                     draftCustomId = cProf.id
                                 },
                                 label = {
@@ -2086,7 +2255,10 @@ private fun PerAppRuleItemCard(
                             Text("Auto-Enable Motherboard Bypass Charging", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
                             Text("Powers POCO F6 directly from AC when plugged in during this app", fontSize = 9.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Switch(checked = draftBypass, onCheckedChange = { draftBypass = it })
+                        Switch(checked = draftBypass, onCheckedChange = {
+                            haptics.toggle(it)
+                            draftBypass = it
+                        })
                     }
 
                     Row(
@@ -2098,7 +2270,10 @@ private fun PerAppRuleItemCard(
                             Text("Purge PageCache & Trim RAM on Launch", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
                             Text("Frees memory before app/game initializes", fontSize = 9.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Switch(checked = draftClearRam, onCheckedChange = { draftClearRam = it })
+                        Switch(checked = draftClearRam, onCheckedChange = {
+                            haptics.toggle(it)
+                            draftClearRam = it
+                        })
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
@@ -2109,7 +2284,10 @@ private fun PerAppRuleItemCard(
                     ) {
                         if (hasRule) {
                             OutlinedButton(
-                                onClick = onRemoveRule,
+                                onClick = {
+                                    haptics.warning()
+                                    onRemoveRule()
+                                },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(10.dp),
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = DangerRed)
@@ -2121,6 +2299,7 @@ private fun PerAppRuleItemCard(
                         }
                         Button(
                             onClick = {
+                                haptics.confirm()
                                 onSaveRule(
                                     AppBatteryProfileRule(
                                         packageName = packageName,

@@ -12,8 +12,6 @@ import com.example.data.model.formatDurationSeconds
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 
 class ExampleUnitTest {
     @Test
@@ -159,6 +157,34 @@ class ExampleUnitTest {
         assertEquals(
             MediaPlatform.VIMEO,
             MediaPlatform.detectFromUrl("https://vimeo.com/123456789")
+        )
+        assertEquals(
+            MediaPlatform.PATREON,
+            MediaPlatform.detectFromUrl("https://www.patreon.com/posts/sample-video-123456789")
+        )
+        assertEquals(
+            MediaPlatform.PATREON,
+            MediaPlatform.detectFromUrl("https://c10.patreonusercontent.com/4/media/video.mp4")
+        )
+        assertEquals(
+            MediaPlatform.BILIBILI,
+            MediaPlatform.detectFromUrl("https://www.bilibili.tv/en/video/4790123456")
+        )
+        assertEquals(
+            MediaPlatform.BILIBILI,
+            MediaPlatform.detectFromUrl("https://www.bilibili.tv/en/play/105678/112233")
+        )
+        assertEquals(
+            MediaPlatform.BILIBILI,
+            MediaPlatform.detectFromUrl("https://www.bilibili.com/video/BV1xx411c7mD")
+        )
+        assertEquals(
+            MediaPlatform.BILIBILI,
+            MediaPlatform.detectFromUrl("https://b23.tv/abcXYZ")
+        )
+        assertEquals(
+            MediaPlatform.PAWCHIVE,
+            MediaPlatform.detectFromUrl("https://pawchive.pw/posts/full-episode-9876")
         )
         assertEquals(
             MediaPlatform.DIRECT,
@@ -413,4 +439,179 @@ class ExampleUnitTest {
             miniPillOverlay.overlayStyle
         )
     }
+
+    @Test
+    fun testInbuiltPugbMobile120FpsCustomProfile() {
+        assertEquals(
+            "inbuilt_pugb_mobile_120fps",
+            com.example.data.model.INBUILT_PUGB_MOBILE_PROFILE_ID
+        )
+        val profile = com.example.data.model.inbuiltPugbMobileProfile()
+        assertEquals(com.example.data.model.INBUILT_PUGB_MOBILE_PROFILE_ID, profile.id)
+        assertEquals("PUGB Mobile", profile.title)
+
+        // Verify SM8635 (1x X4 + 4x A720 + 3x A520) + Adreno 735 frequency floors/ceilings
+        assertEquals(1324800, profile.silverMinFreqKhz)
+        assertEquals(2016000, profile.silverMaxFreqKhz)
+        assertEquals(1824000, profile.goldMinFreqKhz)
+        assertEquals(2803200, profile.goldMaxFreqKhz)
+        assertEquals(1900800, profile.primeMinFreqKhz)
+        assertEquals(3014400, profile.primeMaxFreqKhz)
+        assertEquals(500, profile.gpuMinFreqMhz)
+        assertEquals(1100, profile.gpuMaxFreqMhz)
+
+        // Verify WALT & Adreno 735 sustained 120 FPS pacing parameters
+        assertEquals("walt", profile.governor)
+        assertEquals("msm-adreno-tz", profile.gpuGovernor)
+        assertEquals(3, profile.adrenoBoostVal)
+        assertEquals(0, profile.gpuPowerLevel)
+        assertEquals(1500000, profile.waltDownRateLimitUs)
+        assertEquals(30, profile.uclampTopMinPct)
+        assertEquals(100, profile.uclampTopMaxPct)
+        assertTrue(profile.cpuBoostEnabled)
+        assertTrue(profile.inputBoostEnabled)
+        assertEquals(250, profile.cpuBoostDurationMs)
+        assertEquals(15, profile.cpuBoostGpuThreshold)
+        assertTrue(profile.latencySensitive)
+        assertEquals("HIGH_90", profile.busScaleMode)
+        assertTrue(profile.suppressRomThermal)
+
+        // Verify thermal caps sit safely within BatteryProfilesSection UI slider bounds
+        assertEquals(48.0f, profile.thermalLimitC, 0.01f)
+        assertEquals(95.0f, profile.socThermalLimitC, 0.01f)
+        assertEquals(90.0f, profile.gpuThermalLimitC, 0.01f)
+        assertTrue(profile.thermalLimitC in 36.0f..50.0f)
+        assertTrue(profile.socThermalLimitC in 70.0f..98.0f)
+        assertTrue(profile.gpuThermalLimitC in 65.0f..95.0f)
+    }
+
+    @Test
+    fun testPatreonPlatformAndMpegTsDetection() {
+        assertEquals(
+            MediaPlatform.PATREON,
+            MediaPlatform.detectFromUrl("https://patreon.com/posts/987654321")
+        )
+        assertEquals(
+            MediaPlatform.PATREON,
+            MediaPlatform.detectFromUrl("https://www.patreon.com/file?h=xyz&i=112233")
+        )
+        assertEquals("Patreon", MediaPlatform.PATREON.displayName)
+
+        val tsTemp = File.createTempFile("sample_hls", ".ts")
+        try {
+            val tsBytes = ByteArray(376)
+            tsBytes[0] = 0x47
+            tsBytes[188] = 0x47
+            tsTemp.writeBytes(tsBytes)
+            assertTrue("Valid 188-byte MPEG-TS packets must be detected", MediaProcessingEngine.isMpegTsFile(tsTemp))
+        } finally {
+            tsTemp.delete()
+        }
+    }
+
+    @Test
+    fun testUnknownDurationDoesNotForceThirtySecondsInEnrichment() {
+        val client = okhttp3.OkHttpClient()
+        val backend = com.example.data.downloader.BackendApiClient(client)
+        val engine = com.example.data.downloader.MediaExtractionEngine(client, backend, null)
+
+        val zeroDurInfo = com.example.data.model.MediaInfo(
+            originalUrl = "https://example.org/stream.mp4",
+            canonicalUrl = "https://example.org/stream.mp4",
+            title = "Stream",
+            creator = "Creator",
+            durationSeconds = 0L,
+            durationFormatted = "Full Stream",
+            thumbnailUrl = "",
+            platform = MediaPlatform.PATREON,
+            videoFormats = emptyList(),
+            audioFormats = emptyList()
+        )
+        val enrichedZero = engine.enrichMediaInfoWithDetailedFormats(zeroDurInfo)
+        assertEquals(0L, enrichedZero.durationSeconds)
+        assertEquals("Full Stream", enrichedZero.durationFormatted)
+    }
+
+    @Test
+    fun testUniversalPlatformAndDirectFileExtensionDetection() {
+        val directUrls = listOf(
+            "https://example.org/builds/archive.zip",
+            "https://example.org/builds/package.rar",
+            "https://example.org/builds/bundle.7z",
+            "https://example.org/builds/app-release.apk?token=123",
+            "https://example.org/builds/app-bundle.xapk",
+            "https://example.org/builds/setup.exe",
+            "https://example.org/builds/docs/manual.pdf#page=2",
+            "https://example.org/builds/ubuntu-24.04.iso",
+            "https://example.org/assets/wallpaper.png",
+            "https://example.org/books/handbook.epub",
+            "https://example.org/fonts/inter.woff2",
+            "https://example.org/linux/app.deb"
+        )
+        directUrls.forEach { url ->
+            assertEquals("Expected DIRECT for $url", MediaPlatform.DIRECT, MediaPlatform.detectFromUrl(url))
+            assertTrue("Expected direct file ext for $url", MediaPlatform.hasDirectFileExtension(url))
+        }
+
+        val webpageUrl = "https://github.com/org/project/releases/tag/v1.0"
+        assertEquals(MediaPlatform.OTHER, MediaPlatform.detectFromUrl(webpageUrl))
+        assertFalse(MediaPlatform.hasDirectFileExtension(webpageUrl))
+    }
+
+    @Test
+    fun testUniversalFileValidation() {
+        val validZip = File.createTempFile("valid_archive", ".zip")
+        try {
+            validZip.writeBytes(byteArrayOf(0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00) + ByteArray(512))
+            val report = MediaProcessingEngine.validateUniversalFile(
+                file = validZip,
+                expectedExtension = "zip",
+                expectedMimeType = "application/zip",
+                expectedContentLength = validZip.length()
+            )
+            assertTrue("Valid ZIP should pass universal validation: ${report.errorReason}", report.isValid)
+        } finally {
+            validZip.delete()
+        }
+
+        val disguisedHtml = File.createTempFile("fake_archive", ".zip")
+        try {
+            disguisedHtml.writeText("<!DOCTYPE html><html><body>404 Not Found</body></html>")
+            val report = MediaProcessingEngine.validateUniversalFile(
+                file = disguisedHtml,
+                expectedExtension = "zip",
+                expectedMimeType = "application/zip",
+                expectedContentLength = -1L
+            )
+            assertFalse("HTML disguised as .zip must fail universal validation", report.isValid)
+        } finally {
+            disguisedHtml.delete()
+        }
+
+        val truncatedApk = File.createTempFile("truncated_app", ".apk")
+        try {
+            truncatedApk.writeBytes(ByteArray(1000))
+            val report = MediaProcessingEngine.validateUniversalFile(
+                file = truncatedApk,
+                expectedExtension = "apk",
+                expectedMimeType = "application/vnd.android.package-archive",
+                expectedContentLength = 2000L
+            )
+            assertFalse("Truncated file below 90% expected size must fail validation", report.isValid)
+        } finally {
+            truncatedApk.delete()
+        }
+    }
+
+    @Test
+    fun testIdmOptimalConnectionsCalculation() {
+        assertEquals(1, com.example.data.downloader.IdmAcceleratedDownloader.calculateOptimalConnections(256L * 1024L, 16))
+        assertEquals(1, com.example.data.downloader.IdmAcceleratedDownloader.calculateOptimalConnections(50L * 1024L * 1024L, 1))
+        assertEquals(4, com.example.data.downloader.IdmAcceleratedDownloader.calculateOptimalConnections(1L * 1024L * 1024L, 16))
+        assertEquals(8, com.example.data.downloader.IdmAcceleratedDownloader.calculateOptimalConnections(10L * 1024L * 1024L, 16))
+        assertEquals(16, com.example.data.downloader.IdmAcceleratedDownloader.calculateOptimalConnections(50L * 1024L * 1024L, 16))
+        assertEquals(12, com.example.data.downloader.IdmAcceleratedDownloader.calculateOptimalConnections(50L * 1024L * 1024L, 12))
+    }
 }
+
+

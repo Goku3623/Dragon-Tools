@@ -23,7 +23,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:fontFamily="monospace"
-            android:text="⚡ DRAGON KERNEL // TELEMETRY HUD"
+            android:text="⚡ DRAGON TURBO DECK // TELEMETRY"
             android:textColor="#FF2A4B"
             android:textSize="10sp"
             android:textStyle="bold" />
