@@ -523,6 +523,8 @@ class DragonMonitorService : Service() {
                     .setSmallIcon(R.drawable.ic_notif_telemetry)
                     .setColor(m3Primary)
                     .setColorized(false)
+                    .setGroup(GROUP_MAIN_TELEMETRY_HUD)
+                    .setSortKey("01_main_hud")
                     .setCustomContentView(collapsedView)
                     .setCustomBigContentView(expandedView)
                     .setStyle(NotificationCompat.DecoratedCustomViewStyle())
@@ -541,6 +543,8 @@ class DragonMonitorService : Service() {
                 return NotificationCompat.Builder(this, DragonKernelApp.CHANNEL_TELEMETRY)
                     .setSmallIcon(R.drawable.ic_notif_telemetry)
                     .setColor(accentColorInt)
+                    .setGroup(GROUP_MAIN_TELEMETRY_HUD)
+                    .setSortKey("01_main_hud")
                     .setContentTitle(titleText)
                     .setContentText(line2Drain)
                     .setSubText(subTextHeader)
@@ -635,6 +639,8 @@ class DragonMonitorService : Service() {
                     .setSmallIcon(R.drawable.ic_notif_telemetry)
                     .setColor(accentColorInt)
                     .setColorized(false)
+                    .setGroup(GROUP_MAIN_TELEMETRY_HUD)
+                    .setSortKey("01_main_hud")
                     .setCustomContentView(collapsedView)
                     .setCustomBigContentView(expandedView)
                     .setStyle(NotificationCompat.DecoratedCustomViewStyle())
@@ -707,6 +713,8 @@ class DragonMonitorService : Service() {
                     .setSmallIcon(R.drawable.ic_notif_telemetry)
                     .setColor(glassAccent)
                     .setColorized(false)
+                    .setGroup(GROUP_MAIN_TELEMETRY_HUD)
+                    .setSortKey("01_main_hud")
                     .setCustomContentView(collapsedView)
                     .setCustomBigContentView(expandedView)
                     .setStyle(NotificationCompat.DecoratedCustomViewStyle())
@@ -733,7 +741,7 @@ class DragonMonitorService : Service() {
         )
 
         val warningNotification = NotificationCompat.Builder(this, DragonKernelApp.CHANNEL_THERMAL_ALERT)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_notif_telemetry)
             .setContentTitle("Thermal Alert • POCO F6")
             .setContentText(
                 String.format(
@@ -805,6 +813,7 @@ class DragonMonitorService : Service() {
         const val NOTIFICATION_ID = 9001
         const val THERMAL_WARNING_NOTIFICATION_ID = 9002
         const val RESTART_REQUEST_CODE = 9099
+        const val GROUP_MAIN_TELEMETRY_HUD = "com.example.dragon.GROUP_MAIN_TELEMETRY_HUD"
         private const val PREFS_SERVICE_STATE = "dragon_monitor_service_state"
         private const val KEY_EXPLICITLY_STOPPED = "explicitly_stopped"
         const val ACTION_START_SERVICE = "com.example.dragonkernel.START_MONITOR"

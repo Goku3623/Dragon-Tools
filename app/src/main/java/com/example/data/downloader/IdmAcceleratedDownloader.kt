@@ -144,6 +144,7 @@ class IdmAcceleratedDownloader(
         rejectHtml: Boolean,
         requestHeadersProvider: (targetUrl: String) -> Map<String, String>,
         isPausedOrCancelled: () -> Boolean,
+        onSmartRetry: ((attempt: Int, maxAttempts: Int, reason: String) -> Unit)? = null,
         onProgress: (IdmProgressUpdate) -> Unit
     ): DownloadOutcome {
         if (isPausedOrCancelled()) throw CancellationException("Download paused or cancelled")
@@ -169,7 +170,7 @@ class IdmAcceleratedDownloader(
             )
         }
 
-        val segmentCount = if (probe.acceptRanges &&
+        val initialSegmentCount = if (probe.acceptRanges &&
             probe.hasAuthoritativeTotalBytes &&
             probe.totalBytes >= CHUNK_THRESHOLD_BYTES
         ) {
@@ -178,39 +179,66 @@ class IdmAcceleratedDownloader(
             1
         }
 
-        if (segmentCount > 1) {
-            try {
-                val downloaded = downloadSegmentedParallel(
-                    url = probe.resolvedUrl,
-                    destFile = destFile,
-                    workDir = workDir,
-                    totalBytes = probe.totalBytes,
-                    segmentCount = segmentCount,
-                    requestHeadersProvider = requestHeadersProvider,
-                    isPausedOrCancelled = isPausedOrCancelled,
-                    onProgress = onProgress
-                )
-                return DownloadOutcome.Completed(
-                    downloadedBytes = downloaded,
-                    activeConnectionsUsed = segmentCount,
-                    contentType = probe.contentType,
-                    resolvedUrl = probe.resolvedUrl,
-                    supportsResume = true
-                )
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (_: Exception) {
-                if (isPausedOrCancelled()) {
-                    throw CancellationException("Download paused or cancelled")
-                }
-                // Any server/range/network rejection under multi-connection seamlessly falls back
-                // to single-connection streaming below without failing the task.
+        if (initialSegmentCount > 1) {
+            // Smart Retry connection step-down ladder (e.g., 16x -> 8x -> 4x -> 1x)
+            val candidateCounts = LinkedHashSet<Int>().apply {
+                add(initialSegmentCount)
+                if (initialSegmentCount > 4) add((initialSegmentCount / 2).coerceAtLeast(4))
+                if (initialSegmentCount > 2) add(2)
+            }.toList()
+
+            for ((tierIdx, segCount) in candidateCounts.withIndex()) {
                 try {
-                    chunkDirFor(workDir, destFile).deleteRecursively()
+                    if (tierIdx > 0) {
+                        onSmartRetry?.invoke(
+                            tierIdx,
+                            candidateCounts.size,
+                            "Stepping down to ${segCount}x DDM threads for server stability"
+                        )
+                        delay(450L * tierIdx)
+                    }
+                    val downloaded = downloadSegmentedParallel(
+                        url = probe.resolvedUrl,
+                        destFile = destFile,
+                        workDir = workDir,
+                        totalBytes = probe.totalBytes,
+                        segmentCount = segCount,
+                        requestHeadersProvider = requestHeadersProvider,
+                        isPausedOrCancelled = isPausedOrCancelled,
+                        onSmartRetry = onSmartRetry,
+                        onProgress = onProgress
+                    )
+                    return DownloadOutcome.Completed(
+                        downloadedBytes = downloaded,
+                        activeConnectionsUsed = segCount,
+                        contentType = probe.contentType,
+                        resolvedUrl = probe.resolvedUrl,
+                        supportsResume = true
+                    )
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (rnhe: RangeNotHonoredException) {
+                    if (isPausedOrCancelled()) {
+                        throw CancellationException("Download paused or cancelled")
+                    }
+                    // Server rejected Range headers; break immediately to single-stream fallback
+                    try {
+                        chunkDirFor(workDir, destFile).deleteRecursively()
+                    } catch (_: Exception) {}
+                    if (destFile.exists()) {
+                        try { destFile.delete() } catch (_: Exception) {}
+                    }
+                    break
                 } catch (_: Exception) {
-                }
-                if (destFile.exists()) {
-                    try { destFile.delete() } catch (_: Exception) {}
+                    if (isPausedOrCancelled()) {
+                        throw CancellationException("Download paused or cancelled")
+                    }
+                    try {
+                        chunkDirFor(workDir, destFile).deleteRecursively()
+                    } catch (_: Exception) {}
+                    if (destFile.exists()) {
+                        try { destFile.delete() } catch (_: Exception) {}
+                    }
                 }
             }
         }
@@ -222,6 +250,7 @@ class IdmAcceleratedDownloader(
             rejectHtml = rejectHtml,
             requestHeadersProvider = requestHeadersProvider,
             isPausedOrCancelled = isPausedOrCancelled,
+            onSmartRetry = onSmartRetry,
             onProgress = onProgress
         )
         return when (singleDownloaded) {
@@ -356,6 +385,7 @@ class IdmAcceleratedDownloader(
         segmentCount: Int,
         requestHeadersProvider: (String) -> Map<String, String>,
         isPausedOrCancelled: () -> Boolean,
+        onSmartRetry: ((attempt: Int, maxAttempts: Int, reason: String) -> Unit)? = null,
         onProgress: (IdmProgressUpdate) -> Unit
     ): Long {
         val chunkDir = chunkDirFor(workDir, destFile).apply { mkdirs() }
@@ -526,9 +556,15 @@ class IdmAcceleratedDownloader(
                                     }
                                     if (writtenForSeg >= expectedLen) {
                                         done = true
-                                    } else if (attempt < 2) {
+                                    } else if (attempt < 4) {
                                         attempt++
-                                        delay(250L * attempt)
+                                        val backoffMs = (350L * (1 shl (attempt - 1))).coerceAtMost(3500L) + (segIdx * 45L)
+                                        onSmartRetry?.invoke(
+                                            attempt,
+                                            4,
+                                            "Resuming chunk #${segIdx + 1} from ${writtenForSeg * 100 / expectedLen}%"
+                                        )
+                                        delay(backoffMs)
                                     } else {
                                         throw IOException("Chunk $segIdx truncated ($writtenForSeg / $expectedLen bytes)")
                                     }
@@ -542,9 +578,15 @@ class IdmAcceleratedDownloader(
                                 if (isPausedOrCancelled()) {
                                     throw CancellationException("Download paused or cancelled")
                                 }
-                                if (attempt < 2) {
+                                if (attempt < 4) {
                                     attempt++
-                                    delay(300L * attempt)
+                                    val backoffMs = (400L * (1 shl (attempt - 1))).coerceAtMost(4000L) + (segIdx * 50L)
+                                    onSmartRetry?.invoke(
+                                        attempt,
+                                        4,
+                                        "Recovering chunk #${segIdx + 1} (${e.javaClass.simpleName})"
+                                    )
+                                    delay(backoffMs)
                                 } else {
                                     cancelAllActiveCalls()
                                     throw e
@@ -634,142 +676,182 @@ class IdmAcceleratedDownloader(
         rejectHtml: Boolean,
         requestHeadersProvider: (String) -> Map<String, String>,
         isPausedOrCancelled: () -> Boolean,
+        onSmartRetry: ((attempt: Int, maxAttempts: Int, reason: String) -> Unit)? = null,
         onProgress: (IdmProgressUpdate) -> Unit
     ): SingleStreamResult {
-        val existingBytes = if (destFile.exists()) destFile.length() else 0L
         val isGoogleVideoCdn = url.contains("googlevideo.com", ignoreCase = true)
+        var streamAttempt = 0
+        val maxStreamRetries = 4
 
-        fun buildRequest(includeRangeHeader: Boolean): Request {
-            val headers = requestHeadersProvider(url)
-            val reqBuilder = Request.Builder()
-                .url(url)
-                .header("Accept-Encoding", "identity")
-            headers.forEach { (k, v) -> reqBuilder.header(k, v) }
-            if (includeRangeHeader) {
-                if (existingBytes > 0L) {
-                    reqBuilder.header("Range", "bytes=$existingBytes-")
-                } else if (isGoogleVideoCdn && !url.contains("range=")) {
-                    reqBuilder.header("Range", "bytes=0-")
+        while (true) {
+            coroutineContext.ensureActive()
+            if (isPausedOrCancelled()) throw CancellationException("Download paused or cancelled")
+
+            val existingBytes = if (destFile.exists()) destFile.length() else 0L
+
+            fun buildRequest(includeRangeHeader: Boolean, byteOffset: Long): Request {
+                val headers = requestHeadersProvider(url)
+                val reqBuilder = Request.Builder()
+                    .url(url)
+                    .header("Accept-Encoding", "identity")
+                headers.forEach { (k, v) -> reqBuilder.header(k, v) }
+                if (includeRangeHeader) {
+                    if (byteOffset > 0L) {
+                        reqBuilder.header("Range", "bytes=$byteOffset-")
+                    } else if (isGoogleVideoCdn && !url.contains("range=")) {
+                        reqBuilder.header("Range", "bytes=0-")
+                    }
                 }
-            }
-            return reqBuilder.build()
-        }
-
-        var response = httpClient.newCall(buildRequest(includeRangeHeader = true)).execute()
-        if ((response.code == 403 || response.code == 416) && (existingBytes > 0L || isGoogleVideoCdn)) {
-            response.close()
-            if (existingBytes > 0L && destFile.exists()) {
-                destFile.delete()
-            }
-            response = httpClient.newCall(buildRequest(includeRangeHeader = false)).execute()
-        }
-
-        response.use { resp ->
-            val resolvedUrl = resp.request.url.toString()
-            if (resp.code == 403 || resp.code == 410) {
-                throw ExtractorException(
-                    DownloaderErrorType.EXPIRED_LINK,
-                    "Media stream link returned HTTP ${resp.code}"
-                )
-            }
-            if (!resp.isSuccessful && resp.code != 206) {
-                throw ExtractorException(
-                    DownloaderErrorType.NETWORK_FAILURE,
-                    "Stream server returned HTTP ${resp.code}: ${resp.message}"
-                )
+                return reqBuilder.build()
             }
 
-            val contentType = resp.header("Content-Type") ?: ""
-            if (contentType.contains("mpegurl", ignoreCase = true) ||
-                contentType.contains("vnd.apple.mpegurl", ignoreCase = true)
-            ) {
-                val playlistText = resp.body?.string() ?: ""
-                if (playlistText.contains("#EXTM3U")) {
-                    return SingleStreamResult.HlsDetected(resolvedUrl, playlistText)
+            try {
+                var response = httpClient.newCall(buildRequest(includeRangeHeader = true, byteOffset = existingBytes)).execute()
+                if ((response.code == 403 || response.code == 416) && (existingBytes > 0L || isGoogleVideoCdn)) {
+                    response.close()
+                    if (existingBytes > 0L && destFile.exists()) {
+                        destFile.delete()
+                    }
+                    response = httpClient.newCall(buildRequest(includeRangeHeader = false, byteOffset = 0L)).execute()
                 }
-            }
-            if (rejectHtml && contentType.contains("text/html", ignoreCase = true)) {
-                throw ExtractorException(
-                    DownloaderErrorType.UNSUPPORTED_MEDIA,
-                    "Server returned an HTML page instead of a binary media stream."
-                )
-            }
 
-            val currentExistingBytes = if (destFile.exists()) destFile.length() else 0L
-            val isResumeSupported = resp.code == 206 && currentExistingBytes > 0L
-            val startByteOffset = if (isResumeSupported) currentExistingBytes else 0L
-            val body = resp.body ?: throw ExtractorException(DownloaderErrorType.NETWORK_FAILURE, "Empty stream body.")
-            val responseContentLength = body.contentLength()
-            val totalStreamBytes = when {
-                isResumeSupported && responseContentLength > 0L -> currentExistingBytes + responseContentLength
-                responseContentLength > 0L -> responseContentLength
-                knownTotalBytes > 0L -> knownTotalBytes
-                else -> -1L
-            }
-            val acceptsRangesHeader = resp.code == 206 || resp.header("Accept-Ranges")?.contains("bytes", true) == true
-
-            destFile.parentFile?.mkdirs()
-            FileOutputStream(destFile, isResumeSupported).use { fos ->
-                val input = body.byteStream()
-                val buffer = ByteArray(SINGLE_BUFFER_BYTES)
-                var downloaded = startByteOffset
-                var lastReportMs = SystemClock.elapsedRealtime()
-                var bytesAtLastReport = downloaded
-
-                while (true) {
-                    coroutineContext.ensureActive()
-                    if (isPausedOrCancelled()) {
-                        throw CancellationException("Download paused or cancelled")
+                response.use { resp ->
+                    val resolvedUrl = resp.request.url.toString()
+                    if (resp.code == 403 || resp.code == 410) {
+                        throw ExtractorException(
+                            DownloaderErrorType.EXPIRED_LINK,
+                            "Media stream link returned HTTP ${resp.code}"
+                        )
+                    }
+                    if (resp.code == 429 || resp.code in 500..504) {
+                        throw IOException("Stream server transient HTTP ${resp.code}")
+                    }
+                    if (!resp.isSuccessful && resp.code != 206) {
+                        throw ExtractorException(
+                            DownloaderErrorType.NETWORK_FAILURE,
+                            "Stream server returned HTTP ${resp.code}: ${resp.message}"
+                        )
                     }
 
-                    val read = input.read(buffer)
-                    if (read == -1) break
-                    fos.write(buffer, 0, read)
-                    downloaded += read
-
-                    val now = SystemClock.elapsedRealtime()
-                    val elapsedMs = now - lastReportMs
-                    if (elapsedMs >= REPORT_INTERVAL_MS) {
-                        val deltaBytes = downloaded - bytesAtLastReport
-                        val speedBps = if (elapsedMs > 0L) (deltaBytes * 1000L) / elapsedMs else 0L
-                        val frac = if (totalStreamBytes > 0L) {
-                            (downloaded.toFloat() / totalStreamBytes.toFloat()).coerceIn(0f, 1f)
-                        } else {
-                            0.5f
+                    val contentType = resp.header("Content-Type") ?: ""
+                    if (contentType.contains("mpegurl", ignoreCase = true) ||
+                        contentType.contains("vnd.apple.mpegurl", ignoreCase = true)
+                    ) {
+                        val playlistText = resp.body?.string() ?: ""
+                        if (playlistText.contains("#EXTM3U")) {
+                            return SingleStreamResult.HlsDetected(resolvedUrl, playlistText)
                         }
+                    }
+                    if (rejectHtml && contentType.contains("text/html", ignoreCase = true)) {
+                        throw ExtractorException(
+                            DownloaderErrorType.UNSUPPORTED_MEDIA,
+                            "Server returned an HTML page instead of a binary media stream."
+                        )
+                    }
+
+                    val currentExistingBytes = if (destFile.exists()) destFile.length() else 0L
+                    val isResumeSupported = resp.code == 206 && currentExistingBytes > 0L
+                    val startByteOffset = if (isResumeSupported) currentExistingBytes else 0L
+                    val body = resp.body ?: throw IOException("Empty stream body.")
+                    val responseContentLength = body.contentLength()
+                    val totalStreamBytes = when {
+                        isResumeSupported && responseContentLength > 0L -> currentExistingBytes + responseContentLength
+                        responseContentLength > 0L -> responseContentLength
+                        knownTotalBytes > 0L -> knownTotalBytes
+                        else -> -1L
+                    }
+                    val acceptsRangesHeader = resp.code == 206 || resp.header("Accept-Ranges")?.contains("bytes", true) == true
+
+                    destFile.parentFile?.mkdirs()
+                    FileOutputStream(destFile, isResumeSupported).use { fos ->
+                        val input = body.byteStream()
+                        val buffer = ByteArray(SINGLE_BUFFER_BYTES)
+                        var downloaded = startByteOffset
+                        var lastReportMs = SystemClock.elapsedRealtime()
+                        var bytesAtLastReport = downloaded
+
+                        while (true) {
+                            coroutineContext.ensureActive()
+                            if (isPausedOrCancelled()) {
+                                throw CancellationException("Download paused or cancelled")
+                            }
+
+                            val read = input.read(buffer)
+                            if (read == -1) break
+                            fos.write(buffer, 0, read)
+                            downloaded += read
+
+                            val now = SystemClock.elapsedRealtime()
+                            val elapsedMs = now - lastReportMs
+                            if (elapsedMs >= REPORT_INTERVAL_MS) {
+                                val deltaBytes = downloaded - bytesAtLastReport
+                                val speedBps = if (elapsedMs > 0L) (deltaBytes * 1000L) / elapsedMs else 0L
+                                val frac = if (totalStreamBytes > 0L) {
+                                    (downloaded.toFloat() / totalStreamBytes.toFloat()).coerceIn(0f, 1f)
+                                } else {
+                                    0.5f
+                                }
+                                onProgress(
+                                    IdmProgressUpdate(
+                                        downloadedBytes = downloaded,
+                                        totalBytes = totalStreamBytes,
+                                        speedBytesPerSec = speedBps,
+                                        activeConnections = 1,
+                                        segmentProgress = listOf(frac),
+                                        supportsResume = acceptsRangesHeader
+                                    )
+                                )
+                                lastReportMs = now
+                                bytesAtLastReport = downloaded
+                            }
+                        }
+                        fos.flush()
+
+                        if (totalStreamBytes > 0L && downloaded < totalStreamBytes) {
+                            throw IOException("Stream ended early ($downloaded / $totalStreamBytes bytes)")
+                        }
+
                         onProgress(
                             IdmProgressUpdate(
                                 downloadedBytes = downloaded,
-                                totalBytes = totalStreamBytes,
-                                speedBytesPerSec = speedBps,
+                                totalBytes = if (totalStreamBytes > 0L) totalStreamBytes else downloaded,
+                                speedBytesPerSec = 0L,
                                 activeConnections = 1,
-                                segmentProgress = listOf(frac),
+                                segmentProgress = listOf(1.0f),
                                 supportsResume = acceptsRangesHeader
                             )
                         )
-                        lastReportMs = now
-                        bytesAtLastReport = downloaded
+
+                        return SingleStreamResult.Bytes(
+                            count = downloaded,
+                            contentType = contentType,
+                            resolvedUrl = resolvedUrl,
+                            supportsResume = acceptsRangesHeader
+                        )
                     }
                 }
-                fos.flush()
-
-                onProgress(
-                    IdmProgressUpdate(
-                        downloadedBytes = downloaded,
-                        totalBytes = if (totalStreamBytes > 0L) totalStreamBytes else downloaded,
-                        speedBytesPerSec = 0L,
-                        activeConnections = 1,
-                        segmentProgress = listOf(1.0f),
-                        supportsResume = acceptsRangesHeader
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (ee: ExtractorException) {
+                throw ee
+            } catch (e: IOException) {
+                if (isPausedOrCancelled()) {
+                    throw CancellationException("Download paused or cancelled")
+                }
+                if (streamAttempt < maxStreamRetries) {
+                    streamAttempt++
+                    val resumeBytes = if (destFile.exists()) destFile.length() else 0L
+                    val backoffMs = (600L * (1 shl (streamAttempt - 1))).coerceAtMost(4500L)
+                    onSmartRetry?.invoke(
+                        streamAttempt,
+                        maxStreamRetries,
+                        if (resumeBytes > 0L) "Resuming stream at ${resumeBytes / 1024} KB"
+                        else "Reconnecting stream (${e.javaClass.simpleName})"
                     )
-                )
-
-                return SingleStreamResult.Bytes(
-                    count = downloaded,
-                    contentType = contentType,
-                    resolvedUrl = resolvedUrl,
-                    supportsResume = acceptsRangesHeader
-                )
+                    delay(backoffMs)
+                } else {
+                    throw e
+                }
             }
         }
     }

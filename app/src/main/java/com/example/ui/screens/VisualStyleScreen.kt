@@ -971,13 +971,9 @@ private fun VisualStyleDashboardCard(
                                     .border(1.dp, if (miniFloatingEnabled) SuccessGreen else primaryColor, RoundedCornerShape(8.dp))
                             ) {
                                 Image(
-                                    painter = painterResource(id = R.drawable.ic_launcher_background),
-                                    contentDescription = null,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                                Image(
-                                    painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                                    painter = painterResource(id = R.drawable.ic_dragon_tools_logo),
                                     contentDescription = "Dragon Floating Logo",
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
@@ -3015,13 +3011,9 @@ private fun SelectFloatingTargetGamesDialog(
                         .border(1.dp, NeonCyan, RoundedCornerShape(8.dp))
                 ) {
                     Image(
-                        painter = painterResource(id = R.drawable.ic_launcher_background),
+                        painter = painterResource(id = R.drawable.ic_dragon_tools_logo),
                         contentDescription = null,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                        contentDescription = null,
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
                 }

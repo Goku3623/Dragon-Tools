@@ -168,6 +168,11 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".receiver.DownloadNotificationReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
     </application>
 
 </manifest>

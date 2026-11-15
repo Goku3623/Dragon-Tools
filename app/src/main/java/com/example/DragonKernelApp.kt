@@ -43,14 +43,25 @@ class DragonKernelApp : Application() {
                 setShowBadge(true)
             }
 
+            val downloaderChannel = NotificationChannel(
+                CHANNEL_DOWNLOADER,
+                "DDM Download Control Panel",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Persistent live download progress, speed telemetry, smart retry status, and playback/pause controls"
+                setShowBadge(true)
+            }
+
             notificationManager.createNotificationChannel(telemetryChannel)
             notificationManager.createNotificationChannel(thermalChannel)
+            notificationManager.createNotificationChannel(downloaderChannel)
         }
     }
 
     companion object {
         const val CHANNEL_TELEMETRY = "dragon_kernel_telemetry"
         const val CHANNEL_THERMAL_ALERT = "dragon_thermal_alert"
+        const val CHANNEL_DOWNLOADER = "dragon_ddm_downloads"
         lateinit var instance: DragonKernelApp
             private set
     }

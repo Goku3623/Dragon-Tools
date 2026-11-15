@@ -287,7 +287,7 @@ fun DownloaderScreen(
                                 }
                                 Column {
                                     Text(
-                                        text = "UNIVERSAL IDM & MEDIA DOWNLOADER",
+                                        text = "UNIVERSAL DDM & MEDIA DOWNLOADER",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Black,
                                         letterSpacing = 0.8.sp,
@@ -492,42 +492,35 @@ fun DownloaderScreen(
                                             modifier = Modifier.size(16.dp)
                                         )
                                     }
-                                    Column {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            text = "CLOUDFLARE WARP DNS (1.1.1.1)",
+                                            fontSize = 10.5.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = if (warpDnsEnabled) WarningOrange else MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.weight(1f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = if (warpDnsEnabled) SuccessGreen.copy(alpha = 0.20f)
+                                            else MaterialTheme.colorScheme.surface
                                         ) {
                                             Text(
-                                                text = "CLOUDFLARE WARP DNS (1.1.1.1)",
-                                                fontSize = 10.5.sp,
+                                                text = if (warpDnsEnabled) "ON • SPEED BOOST" else "OFF",
+                                                fontSize = 8.5.sp,
                                                 fontFamily = FontFamily.Monospace,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                color = if (warpDnsEnabled) WarningOrange else MaterialTheme.colorScheme.onSurface
+                                                fontWeight = FontWeight.Black,
+                                                color = if (warpDnsEnabled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                             )
-                                            Surface(
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = if (warpDnsEnabled) SuccessGreen.copy(alpha = 0.20f)
-                                                else MaterialTheme.colorScheme.surface
-                                            ) {
-                                                Text(
-                                                    text = if (warpDnsEnabled) "ON • SPEED BOOST" else "OFF",
-                                                    fontSize = 8.5.sp,
-                                                    fontFamily = FontFamily.Monospace,
-                                                    fontWeight = FontWeight.Black,
-                                                    color = if (warpDnsEnabled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-                                                )
-                                            }
                                         }
-                                        Text(
-                                            text = if (warpDnsEnabled) {
-                                                "1.1.1.1 DoH + UDP • ${warpDnsTelemetry.lastLatencyMs}ms • ${warpDnsTelemetry.cacheHitCount} 0ms Thread Cache Hits"
-                                            } else {
-                                                "Tap to enable Cloudflare 1.1.1.1 DNS acceleration for faster downloads"
-                                            },
-                                            fontSize = 9.5.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
                                     }
                                 }
 
@@ -905,7 +898,7 @@ fun DownloaderScreen(
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Text(
-                                        text = "IDM MULTI-CONNECTION ENGINE",
+                                        text = "DDM MULTI-CONNECTION ENGINE",
                                         fontSize = 10.sp,
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.ExtraBold,
@@ -1705,6 +1698,124 @@ fun DownloaderScreen(
                     )
                 }
 
+                // Persistent Notification Panel & Smart Retry Status Bar + Quick Controls
+                val activeCount = tasks.count { it.stage.isActive || it.isSmartRetrying }
+                val pausedCount = tasks.count { it.stage == DownloadStateStage.PAUSED }
+                val failedCount = tasks.count { it.stage == DownloadStateStage.FAILED }
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = NeonCyan.copy(alpha = 0.10f),
+                    border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("smart_retry_notif_status_bar")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.NotificationsActive,
+                                contentDescription = null,
+                                tint = NeonCyan,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = if (activeCount > 0)
+                                    "Live Notification Panel Active ($activeCount running) • Smart Auto-Retry Armed"
+                                else
+                                    "Persistent Notification Control + 4x Smart Auto-Retry Ready",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            if (activeCount > 0) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = WarningOrange.copy(alpha = 0.18f),
+                                    border = BorderStroke(0.8.dp, WarningOrange.copy(alpha = 0.55f)),
+                                    modifier = Modifier
+                                        .clickable {
+                                            haptics.tap()
+                                            downloadManager.pauseAllDownloads()
+                                        }
+                                        .testTag("pause_all_downloads_chip")
+                                ) {
+                                    Text(
+                                        text = "PAUSE ALL",
+                                        fontSize = 8.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = WarningOrange,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                            if (pausedCount > 0) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = SuccessGreen.copy(alpha = 0.18f),
+                                    border = BorderStroke(0.8.dp, SuccessGreen.copy(alpha = 0.55f)),
+                                    modifier = Modifier
+                                        .clickable {
+                                            haptics.confirm()
+                                            downloadManager.resumeAllDownloads()
+                                        }
+                                        .testTag("resume_all_downloads_chip")
+                                ) {
+                                    Text(
+                                        text = "RESUME ALL",
+                                        fontSize = 8.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = SuccessGreen,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                            if (failedCount > 0) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = NeonCyan.copy(alpha = 0.18f),
+                                    border = BorderStroke(0.8.dp, NeonCyan.copy(alpha = 0.55f)),
+                                    modifier = Modifier
+                                        .clickable {
+                                            haptics.confirm()
+                                            downloadManager.smartRetryAllFailed()
+                                        }
+                                        .testTag("smart_retry_all_failed_chip")
+                                ) {
+                                    Text(
+                                        text = "SMART RETRY ($failedCount)",
+                                        fontSize = 8.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = NeonCyan,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Filter Chips: ALL, BATCH, DOWNLOADING, PROCESSING, COMPLETED, PAUSED, FAILED
                 val batchTaskCount = tasks.count { it.batchSessionId != null }
                 Row(
@@ -1775,7 +1886,7 @@ fun DownloaderScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Paste any website link or file URL above to download verified videos, audio, or any file format with IDM acceleration.",
+                            text = "Paste any website link or file URL above to download verified videos, audio, or any file format with DDM acceleration.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1916,7 +2027,7 @@ private fun DownloadTaskCard(
                                 border = BorderStroke(1.dp, SuccessGreen.copy(alpha = 0.5f))
                             ) {
                                 Text(
-                                    text = "IDM ${task.activeConnections}x",
+                                    text = "DDM ${task.activeConnections}x",
                                     fontSize = 8.sp,
                                     fontWeight = FontWeight.ExtraBold,
                                     color = SuccessGreen,
@@ -1939,20 +2050,47 @@ private fun DownloadTaskCard(
                                 )
                             }
                         }
+                        if (task.isSmartRetrying || task.retryCount > 0) {
+                            val retryColor = if (task.isSmartRetrying) WarningOrange else SuccessGreen
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = retryColor.copy(alpha = 0.16f),
+                                border = BorderStroke(1.dp, retryColor.copy(alpha = 0.55f))
+                            ) {
+                                Text(
+                                    text = if (task.isSmartRetrying)
+                                        "SMART RETRY ${task.retryCount}/${task.maxRetries}"
+                                    else
+                                        "SMART RETRY #${task.retryCount}",
+                                    fontSize = 8.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = retryColor,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
                     }
 
                     // Size & Speed / Verified Details
-                    val targetSaveFolder = when {
-                        task.isGenericFile -> "Downloads/DragonTool/Files"
-                        task.isAudioOnly -> "Downloads/DragonTool/Audio"
-                        else -> "Downloads/DragonTool/Videos"
-                    }
+                    val targetSaveFolder = com.example.data.downloader.DragonDownloadManager.displayFolderForTask(task)
                     Text(
                         text = targetSaveFolder,
                         fontSize = 9.sp,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.primary
                     )
+                    if (!task.retryStatusText.isNullOrBlank()) {
+                        Text(
+                            text = "🛡 ${task.retryStatusText}",
+                            fontSize = 9.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (task.isSmartRetrying) WarningOrange else NeonCyan,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     if (task.stage == DownloadStateStage.COMPLETED) {
                         val verifiedMeta = listOfNotNull(
                             task.totalSizeFormatted,
@@ -2020,7 +2158,7 @@ private fun DownloadTaskCard(
                         )
                     }
 
-                    // Live IDM Multi-Segment Chunk Bar
+                    // Live DDM Multi-Segment Chunk Bar
                     if (task.segmentProgress.size > 1) {
                         Spacer(modifier = Modifier.height(2.dp))
                         Row(
@@ -2029,7 +2167,7 @@ private fun DownloadTaskCard(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "IDM ${task.segmentProgress.size}-Segment Parallel Stream",
+                                text = "DDM ${task.segmentProgress.size}-Segment Parallel Stream",
                                 fontSize = 9.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
@@ -2136,9 +2274,9 @@ private fun DownloadTaskCard(
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                             modifier = Modifier.height(34.dp)
                         ) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Retry", modifier = Modifier.size(15.dp))
+                            Icon(Icons.Default.Refresh, contentDescription = "Smart Retry", modifier = Modifier.size(15.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Retry", fontSize = 11.sp)
+                            Text("Smart Retry", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                     }
@@ -2984,7 +3122,7 @@ fun BatchInputAndConfigCard(
             }
 
             Text(
-                text = "Paste multiple links (any website, video/audio platforms, or direct files like .zip, .apk, .pdf, .iso, .mp4) to download simultaneously with IDM acceleration.",
+                text = "Paste multiple links (any website, video/audio platforms, or direct files like .zip, .apk, .pdf, .iso, .mp4) to download simultaneously with DDM acceleration.",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

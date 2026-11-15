@@ -58,6 +58,8 @@ class BrowserStateRepository(context: Context) {
 
     private val prefs = context.getSharedPreferences("dragon_browser_state", Context.MODE_PRIVATE)
 
+    val extensionEngine = BrowserExtensionEngine(context)
+
     private val _tabsFlow = MutableStateFlow(
         listOf(BrowserTab(url = DEFAULT_HOME_URL, title = "Google"))
     )

@@ -6,19 +6,25 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
+import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -39,18 +45,23 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import com.example.ui.haptics.LocalDragonHaptics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -60,8 +71,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.example.data.adblock.AdBlockerEngine
 import com.example.data.browser.BrowserBookmark
+import com.example.data.browser.BrowserExtension
 import com.example.data.browser.BrowserHistoryEntry
 import com.example.data.browser.BrowserStateRepository
 import com.example.data.browser.BrowserTab
@@ -81,6 +92,7 @@ import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningOrange
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -91,6 +103,7 @@ private enum class BrowserOverlaySheet {
     TABS,
     HISTORY,
     BOOKMARKS,
+    EXTENSIONS,
     MEDIA_GRABBER
 }
 
@@ -121,25 +134,58 @@ fun BrowserScreen(
     val history by browserRepo.historyFlow.collectAsState()
     val bookmarks by browserRepo.bookmarksFlow.collectAsState()
     val grabbedMediaByTab by browserRepo.grabbedMediaByTabFlow.collectAsState()
-    val adsBlockedCount by browserRepo.adsBlockedCountFlow.collectAsState()
-    val adBlockerConfig by repository.adBlockerConfigFlow.collectAsState()
+    val extensions by browserRepo.extensionEngine.extensionsFlow.collectAsState()
+    val enabledExtensionsCount = remember(extensions) { extensions.count { it.enabled } }
     val maxConnections by downloadManager.maxConnectionsFlow.collectAsState()
     val warpDnsEnabled by downloadManager.warpDnsEnabledFlow.collectAsState()
+    val adGuardDnsEnabled by downloadManager.adGuardDnsEnabledFlow.collectAsState()
+    val unfilteredAdGuardDnsEnabled by downloadManager.unfilteredAdGuardDnsEnabledFlow.collectAsState()
     val warpDnsTelemetry by downloadManager.warpDnsTelemetryFlow.collectAsState()
 
     val currentGrabbedMedia = grabbedMediaByTab[activeTab.id].orEmpty()
-    val isAdBlockActive by rememberUpdatedState(adBlockerConfig.isGlobalEnabled)
-    val latestAdBlockerConfig by rememberUpdatedState(adBlockerConfig)
-    val isWarpDnsActive by rememberUpdatedState(warpDnsEnabled)
+    val isCustomDnsActive by rememberUpdatedState(warpDnsEnabled || adGuardDnsEnabled || unfilteredAdGuardDnsEnabled)
 
     var showOverflowMenu by remember { mutableStateOf(false) }
     var activeSheet by remember { mutableStateOf(BrowserOverlaySheet.NONE) }
+    var activeExtensionPopup by remember { mutableStateOf<BrowserExtension?>(null) }
 
     // Download confirmation popup request
     var pendingPopupDownload by remember { mutableStateOf<Pair<MediaInfo, MediaFormatOption>?>(null) }
+    var longPressedLinkUrl by remember { mutableStateOf<String?>(null) }
+    var activeInlineStreamPlayer by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    // Fullscreen HTML5 Video CustomView state (for YouTube, Bilibili, Vimeo, JWPlayer, HLS/DASH players, etc.)
+    var fullscreenCustomView by remember { mutableStateOf<View?>(null) }
+    var fullscreenCustomViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
     // WebView registry keyed by tab.id
     val webViews = remember { mutableStateMapOf<String, WebView>() }
+
+    // SAF File Picker for importing extensions (.zip, .crx, .xpi, .user.js, .js, .css, manifest.json) from local storage
+    val extensionFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val result = browserRepo.extensionEngine.importExtensionFromUri(uri)
+            result.onSuccess { imported ->
+                haptics.confirm()
+                repository.showActionFeedback("Installed extension: ${imported.name} (v${imported.version})")
+                Toast.makeText(
+                    context,
+                    "Extension installed & active: ${imported.name}",
+                    Toast.LENGTH_SHORT
+                ).show()
+                webViews[activeTab.id]?.reload()
+            }.onFailure { err ->
+                haptics.warning()
+                Toast.makeText(
+                    context,
+                    "Extension import failed: ${err.message ?: "Unsupported format"}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
 
     // Omnibox text input state synced to active tab when unfocused
     var omniboxText by remember(activeTab.id) { mutableStateOf(activeTab.url) }
@@ -246,9 +292,15 @@ fun BrowserScreen(
         pendingPopupDownload = info to opt
     }
 
-    // Predictive & Clean Back Handling
+    // Predictive & Clean Back Handling (exits fullscreen video first before navigating back)
     BackHandler {
         when {
+            fullscreenCustomView != null -> {
+                runCatching { fullscreenCustomViewCallback?.onCustomViewHidden() }
+                fullscreenCustomView = null
+                fullscreenCustomViewCallback = null
+            }
+            activeInlineStreamPlayer != null -> activeInlineStreamPlayer = null
             activeSheet != BrowserOverlaySheet.NONE -> activeSheet = BrowserOverlaySheet.NONE
             showOverflowMenu -> showOverflowMenu = false
             webViews[activeTab.id]?.canGoBack() == true -> webViews[activeTab.id]?.goBack()
@@ -382,7 +434,10 @@ fun BrowserScreen(
                                         shape = RoundedCornerShape(6.dp),
                                         color = WarningOrange.copy(alpha = 0.18f),
                                         border = BorderStroke(0.8.dp, WarningOrange.copy(alpha = 0.65f)),
-                                        modifier = Modifier.testTag("browser_omnibox_warp_badge")
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .clickable { showOverflowMenu = true }
+                                            .testTag("browser_omnibox_warp_badge")
                                     ) {
                                         Text(
                                             text = "WARP",
@@ -390,6 +445,28 @@ fun BrowserScreen(
                                             fontFamily = FontFamily.Monospace,
                                             fontWeight = FontWeight.ExtraBold,
                                             color = WarningOrange,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                } else if (adGuardDnsEnabled || unfilteredAdGuardDnsEnabled) {
+                                    val badgeColor = if (adGuardDnsEnabled) SuccessGreen else NeonCyan
+                                    val badgeLabel = if (adGuardDnsEnabled) "ADGUARD" else "UNFILTERED"
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = badgeColor.copy(alpha = 0.18f),
+                                        border = BorderStroke(0.8.dp, badgeColor.copy(alpha = 0.65f)),
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .clickable { showOverflowMenu = true }
+                                            .testTag("browser_omnibox_adguard_badge")
+                                    ) {
+                                        Text(
+                                            text = badgeLabel,
+                                            fontSize = 8.5.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = badgeColor,
                                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                                         )
                                     }
@@ -532,9 +609,7 @@ fun BrowserScreen(
                             context = context,
                             tab = activeTab,
                             desktopMode = activeTab.desktopMode,
-                            isAdBlockActiveProvider = { isAdBlockActive },
-                            adBlockConfigProvider = { latestAdBlockerConfig },
-                            isWarpDnsActiveProvider = { isWarpDnsActive },
+                            isCustomDnsActiveProvider = { isCustomDnsActive },
                             warpDns = downloadManager.warpDns,
                             browserRepo = browserRepo,
                             mainHandler = mainHandler,
@@ -551,6 +626,20 @@ fun BrowserScreen(
                                 browserRepo.updateTabState(crashedTabId) {
                                     it.copy(isLoading = false, progress = 100)
                                 }
+                            },
+                             onLongPressLink = { url ->
+                                longPressedLinkUrl = url
+                            },
+                            onShowFullscreenVideo = { view, callback ->
+                                fullscreenCustomView = view
+                                fullscreenCustomViewCallback = callback
+                            },
+                            onHideFullscreenVideo = {
+                                fullscreenCustomView = null
+                                fullscreenCustomViewCallback = null
+                            },
+                            onOpenInlineStreamPlayer = { streamUrl, title ->
+                                activeInlineStreamPlayer = streamUrl to title
                             }
                         ).also { created ->
                             webViews[targetId] = created
@@ -578,9 +667,66 @@ fun BrowserScreen(
                     }
                 )
 
+                // Hardware-Accelerated Fullscreen Video Overlay for HTML5 / MSE / HLS / DASH Web Players
+                fullscreenCustomView?.let { customVideoView ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("browser_fullscreen_video_container"),
+                        color = Color.Black
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            AndroidView(
+                                modifier = Modifier.fillMaxSize(),
+                                factory = { ctx ->
+                                    FrameLayout(ctx).apply {
+                                        setBackgroundColor(android.graphics.Color.BLACK)
+                                        layoutParams = ViewGroup.LayoutParams(
+                                            ViewGroup.LayoutParams.MATCH_PARENT,
+                                            ViewGroup.LayoutParams.MATCH_PARENT
+                                        )
+                                    }
+                                },
+                                update = { fsContainer ->
+                                    if (fsContainer.childCount != 1 || fsContainer.getChildAt(0) !== customVideoView) {
+                                        fsContainer.removeAllViews()
+                                        (customVideoView.parent as? ViewGroup)?.removeView(customVideoView)
+                                        fsContainer.addView(
+                                            customVideoView,
+                                            FrameLayout.LayoutParams(
+                                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                                ViewGroup.LayoutParams.MATCH_PARENT
+                                            )
+                                        )
+                                    }
+                                }
+                            )
+                            IconButton(
+                                onClick = {
+                                    haptics.tap()
+                                    runCatching { fullscreenCustomViewCallback?.onCustomViewHidden() }
+                                    fullscreenCustomView = null
+                                    fullscreenCustomViewCallback = null
+                                },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(12.dp)
+                                    .size(40.dp)
+                                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FullscreenExit,
+                                    contentDescription = "Exit Fullscreen Video",
+                                    tint = Color.White
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Floating Media Grabber Pill when video/audio/files are detected on page
                 androidx.compose.animation.AnimatedVisibility(
-                    visible = currentGrabbedMedia.isNotEmpty(),
+                    visible = currentGrabbedMedia.isNotEmpty() && fullscreenCustomView == null,
                     enter = fadeIn(),
                     exit = fadeOut(),
                     modifier = Modifier
@@ -850,109 +996,237 @@ fun BrowserScreen(
                                     modifier = Modifier.testTag("menu_saved_bookmarks")
                                 )
 
-                                // Ad Blocker Toggle
+                                // Compact Cloudflare WARP DNS (1.1.1.1) Toggle
                                 DropdownMenuItem(
                                     text = {
-                                        Column {
-                                            Text("Ad Blocker", fontWeight = FontWeight.SemiBold)
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
                                             Text(
-                                                text = if (adBlockerConfig.isGlobalEnabled) {
-                                                    "Active • $adsBlockedCount ads blocked"
-                                                } else {
-                                                    "Tap to block web ads & popups"
-                                                },
-                                                fontSize = 10.sp,
-                                                color = if (adBlockerConfig.isGlobalEnabled) SuccessGreen
-                                                else MaterialTheme.colorScheme.onSurfaceVariant
+                                                text = "WARP DNS",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1
                                             )
-                                        }
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Default.Shield,
-                                            contentDescription = null,
-                                            tint = if (adBlockerConfig.isGlobalEnabled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    },
-                                    trailingIcon = {
-                                        Switch(
-                                            checked = adBlockerConfig.isGlobalEnabled,
-                                            onCheckedChange = null
-                                        )
-                                    },
-                                    onClick = {
-                                        val next = !adBlockerConfig.isGlobalEnabled
-                                        haptics.toggle(next)
-                                        repository.toggleAdBlockerGlobal(next)
-                                        webViews[activeTab.id]?.reload()
-                                    },
-                                    modifier = Modifier.testTag("menu_ad_blocker")
-                                )
-
-                                // Cloudflare WARP DNS (1.1.1.1) Speed Booster Toggle
-                                DropdownMenuItem(
-                                    text = {
-                                        Column {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            Surface(
+                                                shape = RoundedCornerShape(5.dp),
+                                                color = if (warpDnsEnabled) WarningOrange.copy(alpha = 0.18f)
+                                                else MaterialTheme.colorScheme.surfaceVariant
                                             ) {
-                                                Text("Cloudflare WARP DNS", fontWeight = FontWeight.SemiBold)
-                                                Surface(
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    color = if (warpDnsEnabled) WarningOrange.copy(alpha = 0.20f)
-                                                    else MaterialTheme.colorScheme.surfaceVariant
-                                                ) {
-                                                    Text(
-                                                        text = if (warpDnsEnabled) "ON" else "OFF",
-                                                        fontSize = 8.5.sp,
-                                                        fontFamily = FontFamily.Monospace,
-                                                        fontWeight = FontWeight.ExtraBold,
-                                                        color = if (warpDnsEnabled) WarningOrange
-                                                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-                                                    )
-                                                }
+                                                Text(
+                                                    text = if (warpDnsEnabled) "1.1.1.1 • ${warpDnsTelemetry.lastLatencyMs}ms" else "1.1.1.1",
+                                                    fontSize = 8.5.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (warpDnsEnabled) WarningOrange else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
                                             }
-                                            Text(
-                                                text = if (warpDnsEnabled) {
-                                                    "1.1.1.1 Speed Boost • ${warpDnsTelemetry.lastLatencyMs}ms (${warpDnsTelemetry.cacheHitCount} cached)"
-                                                } else {
-                                                    "Tap to enable 1.1.1.1 DoH download speed boost"
-                                                },
-                                                fontSize = 10.sp,
-                                                color = if (warpDnsEnabled) WarningOrange
-                                                else MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
                                         }
                                     },
                                     leadingIcon = {
                                         Icon(
                                             Icons.Default.Bolt,
                                             contentDescription = null,
-                                            tint = if (warpDnsEnabled) WarningOrange else MaterialTheme.colorScheme.onSurfaceVariant
+                                            tint = if (warpDnsEnabled) WarningOrange else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
                                         )
                                     },
                                     trailingIcon = {
                                         Switch(
                                             checked = warpDnsEnabled,
-                                            onCheckedChange = null
+                                            onCheckedChange = null,
+                                            modifier = Modifier.scale(0.68f)
                                         )
                                     },
-                                    onClick = {
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                     onClick = {
                                         val next = !warpDnsEnabled
                                         haptics.toggle(next)
                                         downloadManager.setWarpDnsEnabled(next)
-                                        if (next) {
-                                            val curHost = runCatching { Uri.parse(activeTab.url).host }.getOrNull()
-                                            if (!curHost.isNullOrBlank()) {
-                                                Thread {
-                                                    runCatching { downloadManager.warpDns.lookup(curHost) }
-                                                }.start()
+                                        val curHost = runCatching { Uri.parse(activeTab.url).host }.getOrNull()
+                                        if (next && !curHost.isNullOrBlank()) {
+                                            downloadManager.warpDns.prewarmHostAsync(curHost)
+                                        }
+                                        webViews[activeTab.id]?.let { wv ->
+                                            wv.clearCache(false)
+                                            wv.reload()
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .height(36.dp)
+                                        .testTag("menu_cloudflare_warp_dns")
+                                )
+
+                                // Compact AdGuard DNS (94.140.14.14) Toggle (just below WARP DNS)
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "AdGuard DNS",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1
+                                            )
+                                            Surface(
+                                                shape = RoundedCornerShape(5.dp),
+                                                color = if (adGuardDnsEnabled) SuccessGreen.copy(alpha = 0.18f)
+                                                else MaterialTheme.colorScheme.surfaceVariant
+                                            ) {
+                                                Text(
+                                                    text = if (adGuardDnsEnabled) "94.140.14.14 • ${warpDnsTelemetry.lastLatencyMs}ms" else "94.140.14.14",
+                                                    fontSize = 8.5.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (adGuardDnsEnabled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
                                             }
                                         }
                                     },
-                                    modifier = Modifier.testTag("menu_cloudflare_warp_dns")
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Security,
+                                            contentDescription = null,
+                                            tint = if (adGuardDnsEnabled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    trailingIcon = {
+                                        Switch(
+                                            checked = adGuardDnsEnabled,
+                                            onCheckedChange = null,
+                                            modifier = Modifier.scale(0.68f)
+                                        )
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                    onClick = {
+                                        val next = !adGuardDnsEnabled
+                                        haptics.toggle(next)
+                                        downloadManager.setAdGuardDnsEnabled(next)
+                                        val curHost = runCatching { Uri.parse(activeTab.url).host }.getOrNull()
+                                        if (next && !curHost.isNullOrBlank()) {
+                                            downloadManager.warpDns.prewarmHostAsync(curHost)
+                                        }
+                                        webViews[activeTab.id]?.let { wv ->
+                                            wv.clearCache(false)
+                                            wv.reload()
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .height(36.dp)
+                                        .testTag("menu_adguard_dns")
+                                )
+
+                                // Compact Unfiltered AdGuard DNS (94.140.14.140) Toggle
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "Unfiltered AdGuard DNS",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1
+                                            )
+                                            Surface(
+                                                shape = RoundedCornerShape(5.dp),
+                                                color = if (unfilteredAdGuardDnsEnabled) NeonCyan.copy(alpha = 0.18f)
+                                                else MaterialTheme.colorScheme.surfaceVariant
+                                            ) {
+                                                Text(
+                                                    text = if (unfilteredAdGuardDnsEnabled) "94.140.14.140 • ${warpDnsTelemetry.lastLatencyMs}ms" else "94.140.14.140",
+                                                    fontSize = 8.5.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (unfilteredAdGuardDnsEnabled) NeonCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Dns,
+                                            contentDescription = null,
+                                            tint = if (unfilteredAdGuardDnsEnabled) NeonCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    trailingIcon = {
+                                        Switch(
+                                            checked = unfilteredAdGuardDnsEnabled,
+                                            onCheckedChange = null,
+                                            modifier = Modifier.scale(0.68f)
+                                        )
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                    onClick = {
+                                        val next = !unfilteredAdGuardDnsEnabled
+                                        haptics.toggle(next)
+                                        downloadManager.setUnfilteredAdGuardDnsEnabled(next)
+                                        val curHost = runCatching { Uri.parse(activeTab.url).host }.getOrNull()
+                                        if (next && !curHost.isNullOrBlank()) {
+                                            downloadManager.warpDns.prewarmHostAsync(curHost)
+                                        }
+                                        webViews[activeTab.id]?.let { wv ->
+                                            wv.clearCache(false)
+                                            wv.reload()
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .height(36.dp)
+                                        .testTag("menu_unfiltered_adguard_dns")
+                                )
+
+                                // Extensions (just above Media Grabber)
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text("Extensions", fontWeight = FontWeight.SemiBold)
+                                            Text(
+                                                text = "Import & manage browser extensions",
+                                                fontSize = 10.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Default.Extension,
+                                            contentDescription = "Extensions",
+                                            tint = NeonCyan
+                                        )
+                                    },
+                                    trailingIcon = {
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = if (enabledExtensionsCount > 0) SuccessGreen.copy(alpha = 0.20f)
+                                            else MaterialTheme.colorScheme.surfaceVariant
+                                        ) {
+                                            Text(
+                                                text = "$enabledExtensionsCount ON",
+                                                fontSize = 10.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (enabledExtensionsCount > 0) SuccessGreen
+                                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        haptics.tap()
+                                        showOverflowMenu = false
+                                        activeSheet = BrowserOverlaySheet.EXTENSIONS
+                                    },
+                                    modifier = Modifier.testTag("menu_browser_extensions")
                                 )
 
                                 // Media Grabber
@@ -1028,6 +1302,49 @@ fun BrowserScreen(
                                         showOverflowMenu = false
                                         onOpenDownloadsTab()
                                     }
+                                )
+
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                                // Exit Browser Option (closes all open tabs automatically on exit)
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = "Exit Browser",
+                                            fontWeight = FontWeight.Bold,
+                                            color = DangerRed
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.ExitToApp,
+                                            contentDescription = "Exit Browser",
+                                            tint = DangerRed
+                                        )
+                                    },
+                                    onClick = {
+                                        haptics.warning()
+                                        showOverflowMenu = false
+                                        val hadIncognito = tabs.any { it.isIncognito }
+                                        webViews.values.forEach { wv ->
+                                            runCatching {
+                                                wv.stopLoading()
+                                                (wv.parent as? ViewGroup)?.removeView(wv)
+                                                if (hadIncognito) {
+                                                    wv.clearCache(true)
+                                                    wv.clearHistory()
+                                                }
+                                                wv.destroy()
+                                            }
+                                        }
+                                        webViews.clear()
+                                        if (hadIncognito) {
+                                            runCatching { CookieManager.getInstance().removeSessionCookies(null) }
+                                        }
+                                        browserRepo.closeAllTabs()
+                                        onCloseBrowser()
+                                    },
+                                    modifier = Modifier.testTag("menu_exit_browser")
                                 )
                             }
                         }
@@ -1115,6 +1432,45 @@ fun BrowserScreen(
             )
         }
 
+        BrowserOverlaySheet.EXTENSIONS -> {
+            BrowserExtensionsDialog(
+                extensions = extensions,
+                activePageUrl = activeTab.url,
+                onImportFromStorageClick = {
+                    haptics.tap()
+                    extensionFilePickerLauncher.launch(arrayOf("*/*"))
+                },
+                onToggleExtension = { ext, enabled ->
+                    haptics.toggle(enabled)
+                    browserRepo.extensionEngine.setExtensionEnabled(ext.id, enabled)
+                    webViews[activeTab.id]?.reload()
+                },
+                onRemoveExtension = { ext ->
+                    haptics.warning()
+                    browserRepo.extensionEngine.removeExtension(ext.id)
+                    webViews[activeTab.id]?.reload()
+                },
+                onOpenExtensionPopup = { ext ->
+                    haptics.tap()
+                    activeSheet = BrowserOverlaySheet.NONE
+                    activeExtensionPopup = ext
+                },
+                onCreateCustomExtension = { name, desc, matchPattern, jsCode, cssCode ->
+                    haptics.confirm()
+                    val created = browserRepo.extensionEngine.createCustomExtension(
+                        name = name,
+                        description = desc,
+                        matchPattern = matchPattern,
+                        jsCode = jsCode,
+                        cssCode = cssCode
+                    )
+                    repository.showActionFeedback("Extension enabled: ${created.name}")
+                    webViews[activeTab.id]?.reload()
+                },
+                onDismiss = { activeSheet = BrowserOverlaySheet.NONE }
+            )
+        }
+
         BrowserOverlaySheet.MEDIA_GRABBER -> {
             BrowserMediaGrabberDialog(
                 pageTitle = activeTab.title,
@@ -1125,10 +1481,20 @@ fun BrowserScreen(
                     haptics.tap()
                     webViews[activeTab.id]?.evaluateJavascript(DOM_MEDIA_SCANNER_JS, null)
                 },
+                onSelectCandidateStream = { candidate ->
+                    haptics.confirm()
+                    activeSheet = BrowserOverlaySheet.NONE
+                    activeInlineStreamPlayer = candidate.url to candidate.title.ifBlank { activeTab.title }
+                },
                 onSelectCandidateDownload = { candidate ->
                     haptics.confirm()
                     activeSheet = BrowserOverlaySheet.NONE
                     triggerGrabPopup(candidate)
+                },
+                onSelectExtractedStream = { info, format ->
+                    haptics.confirm()
+                    activeSheet = BrowserOverlaySheet.NONE
+                    activeInlineStreamPlayer = format.streamUrl to "${info.title} (${format.qualityLabel})"
                 },
                 onSelectExtractedDownload = { info, format ->
                     haptics.confirm()
@@ -1140,6 +1506,63 @@ fun BrowserScreen(
         }
 
         BrowserOverlaySheet.NONE -> Unit
+    }
+
+    // Extension Popup Action Dialog (renders extension's popup.html with full chrome.* / browser.* API bridge)
+    activeExtensionPopup?.let { popupExt ->
+        BrowserExtensionPopupDialog(
+            extension = popupExt,
+            extensionEngine = browserRepo.extensionEngine,
+            onOpenTabFromExtension = { url ->
+                openUrlInTab(url, inNewTab = true, incognito = activeTab.isIncognito)
+            },
+            onDismiss = { activeExtensionPopup = null }
+        )
+    }
+
+    // Built-in Universal Online Video & Audio Stream Player Modal (HLS .m3u8, DASH .mpd, MP4, WebM, MKV, Audio)
+    activeInlineStreamPlayer?.let { (streamUrl, streamTitle) ->
+        BrowserUniversalStreamPlayerDialog(
+            streamUrl = streamUrl,
+            streamTitle = streamTitle,
+            pageRefererUrl = activeTab.url,
+            onDownloadStream = {
+                activeInlineStreamPlayer = null
+                val ext = streamUrl.substringBefore('?').substringAfterLast('.', "")
+                    .lowercase(Locale.US).takeIf { it.length in 2..5 } ?: "mp4"
+                val isAudio = WebViewMediaExtractor.isLikelyAudioStreamUrl(streamUrl.lowercase(Locale.US))
+                val format = MediaFormatOption(
+                    id = "stream_dl_${streamUrl.hashCode()}",
+                    qualityLabel = if (ext == "m3u8") "HLS Stream" else ext.uppercase(Locale.US),
+                    resolutionHeight = if (isAudio) 0 else 1080,
+                    container = if (ext == "m3u8" || ext == "mpd") "mp4" else ext,
+                    mimeType = if (isAudio) "audio/$ext" else "video/mp4",
+                    isAudioOnly = isAudio,
+                    streamUrl = streamUrl,
+                    requestHeaders = mapOf(
+                        "Referer" to activeTab.url,
+                        "User-Agent" to MOBILE_USER_AGENT
+                    )
+                )
+                val info = MediaInfo(
+                    originalUrl = activeTab.url,
+                    canonicalUrl = streamUrl,
+                    title = streamTitle.ifBlank { "Stream_Video" },
+                    creator = Uri.parse(activeTab.url).host?.removePrefix("www.") ?: "Web Stream",
+                    durationSeconds = 0L,
+                    durationFormatted = "Live Stream",
+                    thumbnailUrl = "",
+                    platform = MediaPlatform.detectFromUrl(streamUrl).let {
+                        if (it == MediaPlatform.UNSUPPORTED) MediaPlatform.DIRECT else it
+                    },
+                    videoFormats = if (isAudio) emptyList() else listOf(format),
+                    audioFormats = if (isAudio) listOf(format) else emptyList(),
+                    extractorSource = "Universal Stream Player"
+                )
+                pendingPopupDownload = info to format
+            },
+            onDismiss = { activeInlineStreamPlayer = null }
+        )
     }
 
     // Start Download Pop-up Window (checks storage permission, saves to Downloads/DragonTool, lets user edit filename)
@@ -1156,6 +1579,63 @@ fun BrowserScreen(
             }
         )
     }
+
+    // Link Long-Press Dialog
+    longPressedLinkUrl?.let { linkToOpen ->
+        val isStreamableLink = remember(linkToOpen) {
+            val l = linkToOpen.lowercase(Locale.US)
+            WebViewMediaExtractor.isLikelyVideoStreamUrl(l) ||
+                WebViewMediaExtractor.isLikelyAudioStreamUrl(l) ||
+                com.example.data.downloader.CloudflareWarpDns.isLikelyMediaStreamAssetUrl(l)
+        }
+        BrowserLinkLongPressDialog(
+            url = linkToOpen,
+            isStreamableMedia = isStreamableLink,
+            onStreamMediaNow = {
+                val target = linkToOpen
+                longPressedLinkUrl = null
+                activeInlineStreamPlayer = target to (target.substringAfterLast('/').substringBefore('?').ifBlank { activeTab.title })
+            },
+            onOpenInNewTab = {
+                longPressedLinkUrl = null
+                openUrlInTab(linkToOpen, inNewTab = true, incognito = activeTab.isIncognito)
+            },
+            onOpenInIncognito = {
+                longPressedLinkUrl = null
+                openUrlInTab(linkToOpen, inNewTab = true, incognito = true)
+            },
+            onDownloadLink = {
+                longPressedLinkUrl = null
+                val ext = linkToOpen.substringBefore('?').substringAfterLast('.', "").lowercase(Locale.US).takeIf { it.length in 2..5 } ?: "bin"
+                val format = MediaFormatOption(
+                    id = "direct_${linkToOpen.hashCode()}",
+                    qualityLabel = "Direct Download",
+                    resolutionHeight = 0,
+                    container = ext,
+                    mimeType = "application/octet-stream",
+                    isAudioOnly = false,
+                    streamUrl = linkToOpen,
+                    isGenericFile = true
+                )
+                val mediaInfo = MediaInfo(
+                    originalUrl = linkToOpen,
+                    canonicalUrl = linkToOpen,
+                    title = linkToOpen.substringAfterLast('/').substringBefore('?').ifBlank { "Download File" },
+                    creator = "",
+                    durationSeconds = 0L,
+                    durationFormatted = "00:00",
+                    thumbnailUrl = "",
+                    platform = MediaPlatform.detectFromUrl(linkToOpen),
+                    videoFormats = emptyList(),
+                    audioFormats = emptyList(),
+                    fileFormats = listOf(format)
+                )
+                downloadManager.startDownload(mediaInfo, format)
+                Toast.makeText(context, "Started downloading link", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { longPressedLinkUrl = null }
+        )
+    }
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -1163,20 +1643,44 @@ private fun createConfiguredBrowserWebView(
     context: android.content.Context,
     tab: BrowserTab,
     desktopMode: Boolean,
-    isAdBlockActiveProvider: () -> Boolean,
-    adBlockConfigProvider: () -> com.example.data.model.AdBlockerConfig,
-    isWarpDnsActiveProvider: () -> Boolean,
+    isCustomDnsActiveProvider: () -> Boolean,
     warpDns: com.example.data.downloader.CloudflareWarpDns,
     browserRepo: BrowserStateRepository,
     mainHandler: Handler,
     onDownloadIntercepted: (MediaInfo, MediaFormatOption) -> Unit,
-    onRendererCrashed: (tabId: String, crashedView: WebView?) -> Unit = { _, _ -> }
+    onRendererCrashed: (tabId: String, crashedView: WebView?) -> Unit = { _, _ -> },
+    onLongPressLink: (String) -> Unit = {},
+    onShowFullscreenVideo: (View, WebChromeClient.CustomViewCallback?) -> Unit = { _, _ -> },
+    onHideFullscreenVideo: () -> Unit = {},
+    onOpenInlineStreamPlayer: (streamUrl: String, title: String) -> Unit = { _, _ -> }
 ): WebView {
+    val autoRetriedUrls = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     return WebView(context).apply {
         layoutParams = ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         )
+        // Enable hardware acceleration for 60fps 1080p/4K HTML5 MSE/HLS/DASH video rendering
+        setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        isFocusable = true
+        isFocusableInTouchMode = true
+
+        setOnLongClickListener {
+            val hitTest = hitTestResult
+            if (hitTest != null && (
+                    hitTest.type == WebView.HitTestResult.SRC_ANCHOR_TYPE ||
+                        hitTest.type == WebView.HitTestResult.ANCHOR_TYPE ||
+                        hitTest.type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE
+                    )
+            ) {
+                val url = hitTest.extra
+                if (!url.isNullOrBlank()) {
+                    onLongPressLink(url)
+                    return@setOnLongClickListener true
+                }
+            }
+            false
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             runCatching {
                 setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
@@ -1193,7 +1697,13 @@ private fun createConfiguredBrowserWebView(
             builtInZoomControls = true
             displayZoomControls = false
             mediaPlaybackRequiresUserGesture = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            allowFileAccess = true
+            allowContentAccess = true
+            // Allow HTTP video/audio CDNs embedded inside HTTPS streaming sites
+            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            // Prevent automatic background ad popups while handling user-initiated windows in WebChromeClient
+            javaScriptCanOpenWindowsAutomatically = false
+            setSupportMultipleWindows(true)
             userAgentString = if (desktopMode) DESKTOP_USER_AGENT else MOBILE_USER_AGENT
             cacheMode = if (tab.isIncognito) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
         }
@@ -1237,8 +1747,73 @@ private fun createConfiguredBrowserWebView(
                         }
                     } catch (_: Exception) {}
                 }
+
+                @JavascriptInterface
+                fun openUniversalStreamPlayer(streamUrl: String, label: String) {
+                    if (streamUrl.isBlank() || !streamUrl.startsWith("http", ignoreCase = true)) return
+                    mainHandler.post {
+                        onOpenInlineStreamPlayer(streamUrl.trim(), label.ifBlank { tab.title })
+                    }
+                }
             },
             "DragonBrowserBridge"
+        )
+
+        // Native Bridge for WebExtensions (chrome.* / browser.*) & Userscripts (GM_*)
+        addJavascriptInterface(
+            object {
+                @JavascriptInterface
+                fun storageGet(extId: String): String {
+                    return browserRepo.extensionEngine.getExtensionStorageJson(extId)
+                }
+
+                @JavascriptInterface
+                fun storageSet(extId: String, jsonPatch: String): String {
+                    return browserRepo.extensionEngine.mergeExtensionStorageJson(extId, jsonPatch)
+                }
+
+                @JavascriptInterface
+                fun storageRemove(extId: String, keysArrayJson: String): String {
+                    return browserRepo.extensionEngine.removeExtensionStorageKeys(extId, keysArrayJson)
+                }
+
+                @JavascriptInterface
+                fun storageClear(extId: String) {
+                    browserRepo.extensionEngine.clearExtensionStorage(extId)
+                }
+
+                @JavascriptInterface
+                fun gmXhr(requestJson: String): String {
+                    return browserRepo.extensionEngine.executeCrossOriginXhr(requestJson)
+                }
+
+                @JavascriptInterface
+                fun openTab(url: String) {
+                    val target = url.trim()
+                    if (target.isBlank()) return
+                    mainHandler.post {
+                        val resolved = BrowserStateRepository.resolveBrowserInputToUrl(target)
+                        browserRepo.openNewTab(initialUrl = resolved, isIncognito = tab.isIncognito)
+                    }
+                }
+
+                @JavascriptInterface
+                fun copyClipboard(text: String) {
+                    mainHandler.post {
+                        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                        cm?.setPrimaryClip(android.content.ClipData.newPlainText("Extension", text))
+                    }
+                }
+
+                @JavascriptInterface
+                fun showToast(message: String) {
+                    if (message.isBlank()) return
+                    mainHandler.post {
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            "DragonExtensionBridge"
         )
 
         setDownloadListener { url, _, contentDisposition, mimetype, contentLength ->
@@ -1246,10 +1821,26 @@ private fun createConfiguredBrowserWebView(
             val guessedName = URLUtil.guessFileName(url, contentDisposition, mimetype)
                 .ifBlank { "download_${System.currentTimeMillis()}" }
             val ext = guessedName.substringAfterLast('.', "")
-                .lowercase(Locale.US).takeIf { it.length in 1..6 } ?: "bin"
+                .lowercase(Locale.US).takeIf { it.length in 1..6 }
+                ?: url.substringBefore('?').substringAfterLast('.', "").lowercase(Locale.US).takeIf { it.length in 2..5 }
+                ?: "bin"
             val mime = mimetype?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
-            val isVideo = mime.startsWith("video/", true) || MediaPlatform.VIDEO_EXTENSIONS.any { ".$ext" == it }
+            val isHlsOrDash = ext == "m3u8" || ext == "mpd" ||
+                mime.contains("mpegurl", ignoreCase = true) ||
+                mime.contains("dash+xml", ignoreCase = true)
+            val isVideo = isHlsOrDash || mime.startsWith("video/", true) || MediaPlatform.VIDEO_EXTENSIONS.any { ".$ext" == it }
             val isAudio = mime.startsWith("audio/", true) || MediaPlatform.AUDIO_EXTENSIONS.any { ".$ext" == it }
+
+            // If website redirected directly to an HLS (.m3u8) or DASH (.mpd) manifest or inline stream without attachment disposition,
+            // launch the built-in Universal Stream Player so it streams immediately instead of failing!
+            val isAttachment = contentDisposition?.contains("attachment", ignoreCase = true) == true
+            if (isHlsOrDash && !isAttachment) {
+                mainHandler.post {
+                    onOpenInlineStreamPlayer(url, guessedName.substringBeforeLast('.'))
+                }
+                return@setDownloadListener
+            }
+
             val isGeneric = !isVideo && !isAudio
 
             val format = MediaFormatOption(
@@ -1305,30 +1896,169 @@ private fun createConfiguredBrowserWebView(
                     browserRepo.updateTabState(tab.id) { it.copy(title = title) }
                 }
             }
+
+            // Fullscreen HTML5 Video Player support across all streaming websites
+            override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                if (view == null) return
+                mainHandler.post {
+                    onShowFullscreenVideo(view, callback)
+                }
+            }
+
+            override fun onHideCustomView() {
+                mainHandler.post {
+                    onHideFullscreenVideo()
+                }
+            }
+
+            // Provide a clean transparent poster so <video> tags without poster attribute never flash a grey broken icon
+            override fun getDefaultVideoPoster(): Bitmap? {
+                return runCatching {
+                    Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
+                }.getOrNull()
+            }
+
+            // Grant Protected Media ID (EME / Widevine DRM) so encrypted HTML5/DASH/MSE video streams play smoothly
+            override fun onPermissionRequest(request: PermissionRequest?) {
+                if (request == null) return
+                val granted = request.resources.filter { res ->
+                    res == PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID ||
+                        res == PermissionRequest.RESOURCE_AUDIO_CAPTURE ||
+                        res == PermissionRequest.RESOURCE_VIDEO_CAPTURE
+                }.toTypedArray()
+                if (granted.isNotEmpty()) {
+                    runCatching { request.grant(granted) }
+                } else {
+                    runCatching { request.deny() }
+                }
+            }
+
+            // Smart multi-window handler: blocks ad/popunder windows triggered on video player clicks while loading valid links
+            override fun onCreateWindow(
+                view: WebView?,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: android.os.Message?
+            ): Boolean {
+                val hitTest = view?.hitTestResult
+                val targetUrl = hitTest?.extra
+                if (!targetUrl.isNullOrBlank() && (targetUrl.startsWith("http://", true) || targetUrl.startsWith("https://", true))) {
+                    val targetHost = runCatching { Uri.parse(targetUrl).host }.getOrNull()
+                    val pageHost = runCatching { Uri.parse(view.url ?: tab.url).host }.getOrNull()
+                    val blockedByAdGuard = warpDns.shouldBlockBrowserRequest(
+                        requestUrl = targetUrl,
+                        requestHost = targetHost,
+                        pageHost = pageHost,
+                        isMainFrame = true
+                    )
+                    val isKnownPopunder = !targetHost.isNullOrBlank() &&
+                        com.example.data.downloader.CloudflareWarpDns.isBuiltInAdGuardSinkholeHost(targetHost)
+                    if (!blockedByAdGuard && !isKnownPopunder && isUserGesture) {
+                        view.loadUrl(targetUrl)
+                    }
+                }
+                return false
+            }
         }
 
         webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val target = request?.url?.toString() ?: return false
-                return !(target.startsWith("http://", true) || target.startsWith("https://", true))
+                if (target.startsWith("magnet:", ignoreCase = true) ||
+                    target.substringBefore("?").lowercase(Locale.US).endsWith(".torrent")
+                ) {
+                    val isMagnet = target.startsWith("magnet:", ignoreCase = true)
+                    val title = if (isMagnet) {
+                        runCatching { com.example.data.downloader.TorrentEngine.parseMagnetUri(target).displayName }.getOrNull()
+                            ?: "Magnet_Torrent"
+                    } else {
+                        target.substringBefore("?").substringAfterLast("/").substringBeforeLast(".").ifBlank { "Torrent" }
+                    }
+                    val format = MediaFormatOption(
+                        id = "torrent_p2p_payload",
+                        qualityLabel = if (isMagnet) "Download Torrent Content (Magnet P2P)" else "Download Torrent (.torrent)",
+                        container = "torrent",
+                        mimeType = "application/x-bittorrent",
+                        isAudioOnly = false,
+                        isOriginalBest = true,
+                        streamUrl = target,
+                        isGenericFile = true,
+                        fileCategoryLabel = "Torrent"
+                    )
+                    val info = MediaInfo(
+                        originalUrl = target,
+                        canonicalUrl = target,
+                        title = title,
+                        creator = "BitTorrent P2P",
+                        durationSeconds = 0L,
+                        durationFormatted = "Torrent",
+                        thumbnailUrl = "",
+                        platform = MediaPlatform.TORRENT,
+                        videoFormats = emptyList(),
+                        audioFormats = emptyList(),
+                        extractorSource = "Browser Torrent Interceptor",
+                        fileFormats = listOf(format)
+                    )
+                    mainHandler.post {
+                        onDownloadIntercepted(info, format)
+                    }
+                    return true
+                }
+
+                if (target.startsWith("http://", true) || target.startsWith("https://", true)) {
+                    val targetHost = request.url?.host
+                    val currentHost = runCatching { Uri.parse(view?.url ?: tab.url).host }.getOrNull()
+                    if (isCustomDnsActiveProvider() && !targetHost.isNullOrBlank()) {
+                        // Block AdGuard DNS sinkholed ad/popunder redirects on main frame
+                        if (request.isForMainFrame && warpDns.shouldBlockBrowserRequest(
+                                requestUrl = target,
+                                requestHost = targetHost,
+                                pageHost = currentHost,
+                                isMainFrame = true
+                            )
+                        ) {
+                            return true
+                        }
+                        warpDns.prewarmHostAsync(targetHost)
+                    }
+                    return false
+                }
+
+                // Gracefully handle intent:// fallback URLs if present
+                if (target.startsWith("intent://", ignoreCase = true)) {
+                    val fallbackUrl = runCatching {
+                        val parsedIntent = android.content.Intent.parseUri(target, android.content.Intent.URI_INTENT_SCHEME)
+                        parsedIntent.getStringExtra("browser_fallback_url")
+                    }.getOrNull()
+                    if (!fallbackUrl.isNullOrBlank() && (fallbackUrl.startsWith("http://", true) || fallbackUrl.startsWith("https://", true))) {
+                        view?.loadUrl(fallbackUrl)
+                    }
+                    return true
+                }
+                return true
             }
 
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                 val reqUrl = request?.url?.toString() ?: return null
-                if (isAdBlockActiveProvider() &&
-                    AdBlockerEngine.isBrowserUrlBlocked(reqUrl, adBlockConfigProvider())
-                ) {
-                    mainHandler.post { browserRepo.incrementAdsBlocked() }
-                    return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                val lower = reqUrl.lowercase(Locale.US)
+                val reqHost = request.url?.host
+                val activePageHost = runCatching {
+                    val activeTabUrl = browserRepo.tabsFlow.value.find { it.id == tab.id }?.url ?: tab.url
+                    Uri.parse(activeTabUrl).host
+                }.getOrNull()
+
+                // 0. Serve extension web_accessible_resources (`chrome-extension://`, `https://dragon-ext.local/`)
+                // and enforce active extensions' declarative_net_request rules
+                val extIntercepted = browserRepo.extensionEngine.interceptExtensionRequest(
+                    requestUrl = reqUrl,
+                    pageHost = activePageHost,
+                    isMainFrame = request.isForMainFrame
+                )
+                if (extIntercepted != null) {
+                    return extIntercepted
                 }
 
-                val lower = reqUrl.lowercase(Locale.US)
-                if (isWarpDnsActiveProvider()) {
-                    val reqHost = request.url?.host
-                    if (!reqHost.isNullOrBlank()) {
-                        warpDns.prewarmHostAsync(reqHost)
-                    }
-                }
+                // Capture media streams (.m3u8, .mpd, .mp4, .webm, .mkv, .mp3, .m4a, etc.) for Media Grabber & Stream Player
                 if ((lower.startsWith("http://") || lower.startsWith("https://")) &&
                     !WebViewMediaExtractor.isPreviewUrl(reqUrl) &&
                     !WebViewMediaExtractor.isHtmlEmbedPageUrl(reqUrl)
@@ -1347,7 +2077,7 @@ private fun createConfiguredBrowserWebView(
                             GrabbedMediaKind.AUDIO -> "m4a"
                             GrabbedMediaKind.FILE -> "bin"
                         }
-                        val hostLabel = request.url?.host?.removePrefix("www.") ?: "Stream"
+                        val hostLabel = reqHost?.removePrefix("www.") ?: "Stream"
                         mainHandler.post {
                             val activeTitle = browserRepo.tabsFlow.value.find { it.id == tab.id }?.title ?: "Media"
                             browserRepo.recordGrabbedMedia(
@@ -1363,11 +2093,51 @@ private fun createConfiguredBrowserWebView(
                         }
                     }
                 }
+
+                if (isCustomDnsActiveProvider() && !reqHost.isNullOrBlank() &&
+                    (lower.startsWith("http://") || lower.startsWith("https://"))
+                ) {
+                    // 1. When AdGuard DNS (94.140.14.14) is active, block sinkholed ad/tracker domains cleanly
+                    if (warpDns.shouldBlockBrowserRequest(
+                            requestUrl = reqUrl,
+                            requestHost = reqHost,
+                            pageHost = activePageHost,
+                            isMainFrame = request.isForMainFrame
+                        )
+                    ) {
+                        return warpDns.createBlockedWebResourceResponse(
+                            requestUrl = reqUrl,
+                            acceptHeader = request.requestHeaders?.get("Accept")
+                        )
+                    }
+
+                    // 2. Resolve and cache host on active DNS (WARP 1.1.1.1, AdGuard 94.140.14.14, or Unfiltered AdGuard 94.140.14.140)
+                    warpDns.prewarmHostAsync(reqHost)
+
+                    // 3. If System DNS is poisoned/blocked for this host, tunnel through active Custom DNS OkHttpClient
+                    if (warpDns.shouldTunnelBrowserRequest(reqHost, request.method, request.requestHeaders)) {
+                        val tunneledResponse = warpDns.executeBrowserTunnelRequest(
+                            requestUrl = reqUrl,
+                            method = request.method,
+                            requestHeaders = request.requestHeaders,
+                            isMainFrame = request.isForMainFrame,
+                            defaultUserAgent = if (desktopMode) DESKTOP_USER_AGENT else MOBILE_USER_AGENT
+                        )
+                        if (tunneledResponse != null) {
+                            return tunneledResponse
+                        }
+                    }
+                }
+
                 return super.shouldInterceptRequest(view, request)
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 if (!url.isNullOrBlank()) {
+                    val host = runCatching { Uri.parse(url).host }.getOrNull()
+                    if (isCustomDnsActiveProvider() && !host.isNullOrBlank()) {
+                        warpDns.prewarmHostAsync(host)
+                    }
                     browserRepo.clearGrabbedMediaForTab(tab.id)
                     browserRepo.updateTabState(tab.id) {
                         it.copy(
@@ -1377,6 +2147,11 @@ private fun createConfiguredBrowserWebView(
                             canGoBack = view?.canGoBack() ?: false,
                             canGoForward = view?.canGoForward() ?: false
                         )
+                    }
+                    // Inject active extensions' document_start content scripts & CSS userstyles
+                    val startPayload = browserRepo.extensionEngine.buildInjectionPayloadForUrl(url, "document_start")
+                    if (startPayload.isNotBlank()) {
+                        view?.evaluateJavascript(startPayload, null)
                     }
                 }
             }
@@ -1398,10 +2173,42 @@ private fun createConfiguredBrowserWebView(
                 if (!tab.isIncognito) {
                     CookieManager.getInstance().flush()
                 }
-                if (isAdBlockActiveProvider()) {
-                    view?.evaluateJavascript(COSMETIC_AD_HIDE_JS, null)
+                // Inject active extensions' document_end & document_idle content scripts, userscripts, and CSS
+                val endPayload = browserRepo.extensionEngine.buildInjectionPayloadForUrl(finalUrl, "document_end")
+                if (endPayload.isNotBlank()) {
+                    view?.evaluateJavascript(endPayload, null)
+                }
+                // Inject Universal Video Stream Enhancer (HLS.js / DASH.js fallback + inline/fullscreen polyfill)
+                view?.evaluateJavascript(UNIVERSAL_VIDEO_STREAM_ENHANCER_JS, null)
+                // If AdGuard DNS (94.140.14.14) is active, collapse empty ad containers left behind by blocked DNS requests
+                if (warpDns.isAdGuardDnsEnabled) {
+                    view?.evaluateJavascript(ADGUARD_DNS_COSMETIC_CLEANUP_JS, null)
                 }
                 view?.evaluateJavascript(DOM_MEDIA_SCANNER_JS, null)
+            }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?
+            ) {
+                super.onReceivedError(view, request, error)
+                val reqUrl = request?.url?.toString() ?: return
+                val reqHost = request.url?.host ?: return
+                val errCode = error?.errorCode ?: 0
+                val isDnsOrConnectFailure = errCode == ERROR_HOST_LOOKUP ||
+                    errCode == ERROR_CONNECT ||
+                    errCode == ERROR_TIMEOUT ||
+                    errCode == ERROR_UNKNOWN
+
+                if (isCustomDnsActiveProvider() && isDnsOrConnectFailure) {
+                    warpDns.markHostRequiresTunnel(reqHost)
+                    if (request.isForMainFrame && autoRetriedUrls.add(reqUrl)) {
+                        mainHandler.post {
+                            view?.reload()
+                        }
+                    }
+                }
             }
 
             override fun onRenderProcessGone(
@@ -1783,7 +2590,9 @@ private fun BrowserMediaGrabberDialog(
     candidates: List<GrabbedMediaCandidate>,
     downloadManager: DragonDownloadManager,
     onRefreshScan: () -> Unit,
+    onSelectCandidateStream: (GrabbedMediaCandidate) -> Unit,
     onSelectCandidateDownload: (GrabbedMediaCandidate) -> Unit,
+    onSelectExtractedStream: (MediaInfo, MediaFormatOption) -> Unit,
     onSelectExtractedDownload: (MediaInfo, MediaFormatOption) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1801,7 +2610,7 @@ private fun BrowserMediaGrabberDialog(
             ) {
                 Icon(Icons.Default.VideoLibrary, contentDescription = null, tint = NeonCyan)
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Media Grabber", fontWeight = FontWeight.Black, fontSize = 17.sp)
+                    Text("Media Grabber & Streamer", fontWeight = FontWeight.Black, fontSize = 17.sp)
                     Text(
                         text = pageTitle.ifBlank { pageUrl },
                         fontSize = 10.5.sp,
@@ -1898,6 +2707,18 @@ private fun BrowserMediaGrabberDialog(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
+                                    if (!fmt.isGenericFile) {
+                                        OutlinedButton(
+                                            onClick = { onSelectExtractedStream(info, fmt) },
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                            modifier = Modifier.padding(end = 6.dp)
+                                        ) {
+                                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp), tint = NeonCyan)
+                                            Spacer(modifier = Modifier.width(2.dp))
+                                            Text("Stream", fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
                                     Button(
                                         onClick = { onSelectExtractedDownload(info, fmt) },
                                         colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
@@ -1914,7 +2735,7 @@ private fun BrowserMediaGrabberDialog(
                     if (candidates.isEmpty() && deepExtractedInfo == null) {
                         item {
                             Text(
-                                text = "Play a video on the page or tap 'Deep Extract' to grab video, audio, or downloadable files to Downloads/DragonTool.",
+                                text = "Play a video on the page or tap 'Deep Extract' to stream or grab video, audio, or downloadable files.",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(vertical = 14.dp)
@@ -1967,14 +2788,26 @@ private fun BrowserMediaGrabberDialog(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
-                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    if (item.kind != GrabbedMediaKind.FILE) {
+                                        OutlinedButton(
+                                            onClick = { onSelectCandidateStream(item) },
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                            modifier = Modifier.padding(end = 4.dp)
+                                        ) {
+                                            Icon(Icons.Default.PlayArrow, contentDescription = "Stream", modifier = Modifier.size(14.dp), tint = NeonCyan)
+                                            Spacer(modifier = Modifier.width(2.dp))
+                                            Text("Stream", fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
                                     FilledTonalButton(
                                         onClick = { onSelectCandidateDownload(item) },
                                         shape = RoundedCornerShape(8.dp),
                                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                                     ) {
                                         Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(15.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Spacer(modifier = Modifier.width(3.dp))
                                         Text("Get", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
@@ -1990,22 +2823,278 @@ private fun BrowserMediaGrabberDialog(
     )
 }
 
-private const val COSMETIC_AD_HIDE_JS = """
+/**
+ * Built-in Universal Online Video & Audio Stream Player Dialog.
+ * Supports HLS (.m3u8 via hls.js + native MSE), DASH (.mpd via dash.js), MP4, WebM, MKV, OGG, MP3, M4A
+ * with playback speed control (0.5x - 2.0x), seek bar, and 1-tap DDM Download.
+ */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun BrowserUniversalStreamPlayerDialog(
+    streamUrl: String,
+    streamTitle: String,
+    pageRefererUrl: String,
+    onDownloadStream: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val haptics = LocalDragonHaptics.current
+    val escapedUrl = remember(streamUrl) {
+        JSONObject.quote(streamUrl)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("browser_universal_stream_player_dialog"),
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.PlayCircleFilled, contentDescription = null, tint = NeonCyan)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = streamTitle.ifBlank { "Universal Stream Player" },
+                        fontWeight = FontWeight.Black,
+                        fontSize = 15.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = streamUrl,
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(235.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    color = Color.Black,
+                    border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.4f))
+                ) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                setBackgroundColor(android.graphics.Color.BLACK)
+                                setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    mediaPlaybackRequiresUserGesture = false
+                                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                    useWideViewPort = true
+                                    loadWithOverviewMode = true
+                                    userAgentString = MOBILE_USER_AGENT
+                                }
+                                CookieManager.getInstance().setAcceptCookie(true)
+                                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                                val html = """
+                                    <!DOCTYPE html>
+                                    <html>
+                                    <head>
+                                      <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+                                      <style>
+                                        html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; display:flex; flex-direction:column; justify-content:center; align-items:center; font-family:monospace; }
+                                        video { width:100%; height:100%; max-height:100%; object-fit:contain; background:#000; }
+                                        #status { position:absolute; top:8px; left:10px; color:#00E5FF; font-size:10px; background:rgba(0,0,0,0.65); padding:2px 6px; border-radius:4px; pointer-events:none; }
+                                      </style>
+                                      <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+                                      <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+                                    </head>
+                                    <body>
+                                      <div id="status">STREAM READY</div>
+                                      <video id="v" controls autoplay playsinline webkit-playsinline preload="auto"></video>
+                                      <script>
+                                        (function(){
+                                          var url = $escapedUrl;
+                                          var v = document.getElementById('v');
+                                          var st = document.getElementById('status');
+                                          var lower = url.split('?')[0].toLowerCase();
+                                          function hideStatusLater() { setTimeout(function(){ if(st) st.style.display='none'; }, 2800); }
+                                          v.addEventListener('playing', function(){ st.innerText = 'LIVE PLAYBACK'; hideStatusLater(); });
+                                          if (lower.indexOf('.m3u8') !== -1 || url.toLowerCase().indexOf('m3u8') !== -1) {
+                                            if (window.Hls && Hls.isSupported()) {
+                                              st.innerText = 'HLS ENGINE ACTIVE';
+                                              var hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+                                              hls.loadSource(url);
+                                              hls.attachMedia(v);
+                                              hls.on(Hls.Events.MANIFEST_PARSED, function(){ v.play().catch(function(){}); });
+                                            } else {
+                                              v.src = url;
+                                              v.play().catch(function(){});
+                                            }
+                                          } else if (lower.indexOf('.mpd') !== -1 && window.dashjs) {
+                                            st.innerText = 'DASH ENGINE ACTIVE';
+                                            var player = dashjs.MediaPlayer().create();
+                                            player.initialize(v, url, true);
+                                          } else {
+                                            v.src = url;
+                                            v.play().catch(function(){});
+                                          }
+                                        })();
+                                      </script>
+                                    </body>
+                                    </html>
+                                """.trimIndent()
+                                loadDataWithBaseURL(
+                                    pageRefererUrl.ifBlank { "https://www.google.com" },
+                                    html,
+                                    "text/html",
+                                    "UTF-8",
+                                    null
+                                )
+                            }
+                        },
+                        onRelease = { wv ->
+                            runCatching {
+                                wv.stopLoading()
+                                wv.loadUrl("about:blank")
+                                wv.destroy()
+                            }
+                        }
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            haptics.confirm()
+                            onDownloadStream()
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Download (DDM)", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            haptics.tap()
+                            onDismiss()
+                        },
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Close", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {}
+    )
+}
+
+/**
+ * Universal HTML5 Video, HLS (.m3u8), DASH (.mpd), & Fullscreen Enhancer injected into webpages:
+ * 1. Ensures all <video> elements support inline + fullscreen playback (`playsinline`, `webkit-playsinline`, `preload="metadata"`).
+ * 2. Ensures all embedded video <iframe> players have `allowfullscreen` and `allow="autoplay; fullscreen; picture-in-picture; encrypted-media"`.
+ * 3. Automatically recovers <video> elements whose `.m3u8` HLS or `.mpd` DASH stream triggers MEDIA_ERR_SRC_NOT_SUPPORTED
+ *    on Android WebView by dynamically loading `hls.js` / `dash.js` on the fly.
+ */
+private const val UNIVERSAL_VIDEO_STREAM_ENHANCER_JS = """
 (function() {
   try {
-    if (document.getElementById('dragon-adblock-css')) return;
-    var style = document.createElement('style');
-    style.id = 'dragon-adblock-css';
-    style.textContent = [
-      'ins.adsbygoogle',
-      '[id^="google_ads_"]',
-      '[id*="ad-slot"]',
-      '[class*="ad-banner"]',
-      '[class*="sponsored-ad"]',
-      'iframe[src*="doubleclick.net"]',
-      'iframe[src*="googlesyndication.com"]'
-    ].join(',') + '{ display: none !important; visibility: hidden !important; height: 0 !important; }';
-    (document.head || document.documentElement).appendChild(style);
+    if (window.__dragonVideoEnhancerInstalled) return;
+    window.__dragonVideoEnhancerInstalled = true;
+
+    function enhanceVideosAndFrames() {
+      var frames = document.querySelectorAll('iframe');
+      for (var i = 0; i < frames.length; i++) {
+        var f = frames[i];
+        if (!f.hasAttribute('allowfullscreen')) f.setAttribute('allowfullscreen', 'true');
+        if (!f.hasAttribute('webkitallowfullscreen')) f.setAttribute('webkitallowfullscreen', 'true');
+        var allowAttr = f.getAttribute('allow') || '';
+        if (allowAttr.indexOf('fullscreen') === -1) {
+          f.setAttribute('allow', (allowAttr ? allowAttr + '; ' : '') + 'autoplay; fullscreen; picture-in-picture; encrypted-media');
+        }
+      }
+
+      var videos = document.querySelectorAll('video');
+      for (var j = 0; j < videos.length; j++) {
+        var v = videos[j];
+        if (v.__dragonEnhanced) continue;
+        v.__dragonEnhanced = true;
+        v.setAttribute('playsinline', '');
+        v.setAttribute('webkit-playsinline', '');
+        if (!v.getAttribute('preload') || v.getAttribute('preload') === 'none') {
+          v.setAttribute('preload', 'metadata');
+        }
+
+        (function(videoEl) {
+          function tryHlsRecovery() {
+            var src = videoEl.currentSrc || videoEl.src || '';
+            if (!src) {
+              var sourceTag = videoEl.querySelector('source');
+              if (sourceTag) src = sourceTag.src || '';
+            }
+            if (!src) return;
+            var lower = src.toLowerCase();
+            if (lower.indexOf('.m3u8') !== -1 || lower.indexOf('mpegurl') !== -1) {
+              if (videoEl.__dragonHlsAttached) return;
+              videoEl.__dragonHlsAttached = true;
+              function bindHls() {
+                if (window.Hls && window.Hls.isSupported()) {
+                  var hls = new window.Hls({ enableWorker: true });
+                  hls.loadSource(src);
+                  hls.attachMedia(videoEl);
+                }
+              }
+              if (window.Hls) {
+                bindHls();
+              } else {
+                var s = document.createElement('script');
+                s.src = 'https://cdn.jsdelivr.net/npm/hls.js@latest';
+                s.onload = bindHls;
+                document.head.appendChild(s);
+              }
+            }
+          }
+          videoEl.addEventListener('error', function() {
+            tryHlsRecovery();
+          }, true);
+          var initialSrc = (videoEl.currentSrc || videoEl.src || '').toLowerCase();
+          if (initialSrc.indexOf('.m3u8') !== -1 && !videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+            tryHlsRecovery();
+          }
+        })(v);
+      }
+    }
+
+    enhanceVideosAndFrames();
+    var obs = new MutationObserver(function() { enhanceVideosAndFrames(); });
+    if (document.documentElement) {
+      obs.observe(document.documentElement, { childList: true, subtree: true });
+    }
+  } catch (e) {}
+})();
+"""
+
+/**
+ * Lightweight cosmetic cleanup injected ONLY when AdGuard DNS (94.140.14.14) is active,
+ * collapsing blank ad slots left behind by blocked AdGuard DNS domains without affecting video players.
+ */
+private const val ADGUARD_DNS_COSMETIC_CLEANUP_JS = """
+(function() {
+  try {
+    if (document.getElementById('dragon-adguard-dns-style')) return;
+    var st = document.createElement('style');
+    st.id = 'dragon-adguard-dns-style';
+    st.innerHTML = 'ins.adsbygoogle, [id^="google_ads_iframe"], iframe[src*="doubleclick.net"], iframe[src*="googlesyndication.com"], iframe[src*="exoclick.com"], iframe[src*="juicyads.com"] { display: none !important; height: 0 !important; min-height: 0 !important; }';
+    (document.head || document.documentElement).appendChild(st);
   } catch (e) {}
 })();
 """
@@ -2027,7 +3116,7 @@ private const val DOM_MEDIA_SCANNER_JS = """
       if (el.src) pushItem(el.src, 'Media Element');
     }
     var links = document.querySelectorAll('a[href]');
-    var extRe = /\.(mp4|m4v|webm|mkv|m3u8|mp3|m4a|flac|wav|zip|rar|7z|apk|apks|xapk|pdf|epub)(\?|$)/i;
+    var extRe = /\.(mp4|m4v|webm|mkv|m3u8|mpd|mov|mp3|m4a|flac|wav|zip|rar|7z|apk|apks|xapk|pdf|epub)(\?|$)/i;
     for (var j = 0; j < links.length; j++) {
       var href = links[j].href;
       if (href && extRe.test(href)) {
@@ -2040,3 +3129,122 @@ private const val DOM_MEDIA_SCANNER_JS = """
   } catch (e) {}
 })();
 """
+
+@Composable
+private fun BrowserLinkLongPressDialog(
+    url: String,
+    isStreamableMedia: Boolean = false,
+    onStreamMediaNow: () -> Unit = {},
+    onOpenInNewTab: () -> Unit,
+    onOpenInIncognito: () -> Unit,
+    onDownloadLink: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
+    val haptics = LocalDragonHaptics.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("browser_link_long_press_dialog"),
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.Link, contentDescription = null, tint = NeonCyan)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Link Options", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                    Text(
+                        text = url,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (isStreamableMedia) {
+                    Button(
+                        onClick = {
+                            haptics.confirm()
+                            onStreamMediaNow()
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("link_option_stream_now"),
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonCyan),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color(0xFF03131B))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Stream Video / Audio Now", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF03131B))
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        haptics.tap()
+                        onOpenInNewTab()
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag("link_option_new_tab"),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Open in New Tab", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        haptics.tap()
+                        onOpenInIncognito()
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag("link_option_incognito_tab"),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.VisibilityOff, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Open in Incognito Tab", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        haptics.tap()
+                        clipboardManager.setText(AnnotatedString(url))
+                        Toast.makeText(context, "Link URL copied to clipboard", Toast.LENGTH_SHORT).show()
+                        onDismiss()
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag("link_option_copy_url"),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Copy Link URL", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+
+                Button(
+                    onClick = {
+                        haptics.confirm()
+                        onDownloadLink()
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag("link_option_download"),
+                    colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Download Link", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+

@@ -4,6 +4,32 @@ import java.net.URI
 import java.util.Locale
 import kotlin.math.roundToLong
 
+enum class DownloadFolderCategory(
+    val folderName: String,
+    val displayLabel: String
+) {
+    PROGRAM("Program", "Program"),
+    AUDIO("Audio", "Audio"),
+    VIDEO("Video", "Video"),
+    COMPRESSED("Compressed", "Compressed"),
+    DOCUMENT("Document", "Document"),
+    PHOTO("Photo", "Photo"),
+    OTHER("Other", "Other"),
+    TORRENT("Torrent", "Torrent"),
+    SUBTITLE("Subtitle", "Subtitle");
+
+    val subFolderPath: String
+        get() = "DragonTool/$folderName"
+
+    val displayPath: String
+        get() = "Downloads/DragonTool/$folderName"
+
+    companion object {
+        val ALL_SUBFOLDERS: List<String>
+            get() = entries.map { it.subFolderPath }
+    }
+}
+
 enum class MediaPlatform(
     val displayName: String,
     val badgeColor: Long,
@@ -22,33 +48,47 @@ enum class MediaPlatform(
     PATREON("Patreon", 0xFFFF424D, "PTRN"),
     BILIBILI("Bilibili.tv", 0xFF00A1D6, "BILI"),
     PAWCHIVE("Pawchive", 0xFFFB7185, "PAW"),
+    TORRENT("Torrent / Magnet", 0xFF8B5CF6, "P2P"),
     DIRECT("Direct File / Media", 0xFF10B981, "FILE"),
     OTHER("Any Website", 0xFF6366F1, "WEB"),
     UNSUPPORTED("Unsupported", 0xFF9CA3AF, "N/A");
 
     companion object {
         val VIDEO_EXTENSIONS = setOf(
-            ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".3gp", ".avi", ".flv", ".ts"
+            ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".3gp", ".avi", ".flv", ".wmv", ".ts", ".m3u8", ".mpeg", ".mpg"
         )
         val AUDIO_EXTENSIONS = setOf(
-            ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus", ".wma"
+            ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus", ".wma", ".aiff", ".alac", ".amr", ".mid", ".midi"
         )
         val ARCHIVE_EXTENSIONS = setOf(
-            ".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".zst"
+            ".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".zst", ".lz4", ".cab", ".iso", ".img"
         )
         val INSTALLER_EXTENSIONS = setOf(
-            ".apk", ".apks", ".xapk", ".obb", ".exe", ".msi", ".dmg", ".pkg", ".deb", ".rpm", ".appimage"
+            ".apk", ".apks", ".xapk", ".apkm", ".aab", ".obb",
+            ".exe", ".msi", ".msix", ".dmg", ".pkg", ".deb", ".rpm", ".appimage",
+            ".bat", ".cmd", ".sh", ".run", ".jar", ".ipa"
         )
         val DISK_IMAGE_AND_BIN_EXTENSIONS = setOf(
             ".iso", ".img", ".bin", ".wasm", ".jar", ".torrent"
         )
         val DOCUMENT_EXTENSIONS = setOf(
             ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-            ".txt", ".csv", ".rtf", ".epub", ".mobi", ".json", ".xml"
+            ".txt", ".csv", ".rtf", ".odt", ".ods", ".odp", ".md",
+            ".epub", ".mobi", ".azw3", ".json", ".xml", ".html", ".htm"
         )
-        val IMAGE_AND_FONT_EXTENSIONS = setOf(
+        val IMAGE_EXTENSIONS = setOf(
             ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp", ".ico",
+            ".heic", ".heif", ".avif", ".tiff", ".tif", ".raw", ".cr2", ".nef"
+        )
+        val FONT_EXTENSIONS = setOf(
             ".ttf", ".otf", ".woff2"
+        )
+        val IMAGE_AND_FONT_EXTENSIONS = IMAGE_EXTENSIONS + FONT_EXTENSIONS
+        val SUBTITLE_EXTENSIONS = setOf(
+            ".srt", ".vtt", ".ass", ".ssa", ".sub", ".idx", ".lrc", ".smi", ".sbv"
+        )
+        val TORRENT_EXTENSIONS = setOf(
+            ".torrent"
         )
         val DIRECT_EXTENSIONS: Set<String> = VIDEO_EXTENSIONS +
             AUDIO_EXTENSIONS +
@@ -56,7 +96,9 @@ enum class MediaPlatform(
             INSTALLER_EXTENSIONS +
             DISK_IMAGE_AND_BIN_EXTENSIONS +
             DOCUMENT_EXTENSIONS +
-            IMAGE_AND_FONT_EXTENSIONS
+            IMAGE_AND_FONT_EXTENSIONS +
+            SUBTITLE_EXTENSIONS +
+            TORRENT_EXTENSIONS
 
         fun hasDirectFileExtension(url: String): Boolean {
             val path = url.substringBefore("?").substringBefore("#").lowercase(Locale.US)
@@ -66,6 +108,9 @@ enum class MediaPlatform(
         fun detectFromUrl(rawUrl: String): MediaPlatform {
             val trimmed = rawUrl.trim()
             if (trimmed.isEmpty()) return UNSUPPORTED
+            if (trimmed.startsWith("magnet:", ignoreCase = true)) {
+                return TORRENT
+            }
             val normalized = if (!trimmed.startsWith("http://", true) && !trimmed.startsWith("https://", true)) {
                 "https://$trimmed"
             } else {
@@ -81,6 +126,7 @@ enum class MediaPlatform(
             } catch (_: Exception) {
                 val lower = trimmed.lowercase(Locale.US)
                 return when {
+                    lower.startsWith("magnet:") || lower.substringBefore("?").endsWith(".torrent") -> TORRENT
                     lower.contains("youtube.com/shorts") -> YOUTUBE_SHORTS
                     lower.contains("youtube.com") || lower.contains("youtu.be") -> YOUTUBE
                     lower.contains("tiktok.com") -> TIKTOK
@@ -102,6 +148,7 @@ enum class MediaPlatform(
             if (host.isEmpty()) return UNSUPPORTED
 
             return when {
+                path.endsWith(".torrent") -> TORRENT
                 (host == "youtube.com" || host.endsWith(".youtube.com")) && path.startsWith("/shorts/") -> YOUTUBE_SHORTS
                 host == "youtube.com" || host.endsWith(".youtube.com") || host == "youtu.be" || host == "youtube-nocookie.com" -> YOUTUBE
                 host == "tiktok.com" || host.endsWith(".tiktok.com") || host == "vm.tiktok.com" || host == "vt.tiktok.com" -> TIKTOK
@@ -121,6 +168,116 @@ enum class MediaPlatform(
             }
         }
     }
+}
+
+fun resolveDownloadFolderCategory(
+    extension: String = "",
+    mimeType: String = "",
+    isAudioOnly: Boolean = false,
+    isGenericFile: Boolean = false,
+    url: String = "",
+    platform: MediaPlatform? = null
+): DownloadFolderCategory {
+    val cleanExt = extension.trim().lowercase(Locale.US).removePrefix(".")
+    val dotExt = if (cleanExt.isNotEmpty()) ".$cleanExt" else ""
+    val lowerMime = mimeType.substringBefore(";").trim().lowercase(Locale.US)
+    val lowerUrl = url.trim().lowercase(Locale.US)
+    val lowerPath = lowerUrl.substringBefore("?").substringBefore("#")
+
+    if (platform == MediaPlatform.TORRENT ||
+        cleanExt == "torrent" ||
+        cleanExt == "torrent_data" ||
+        lowerUrl.startsWith("magnet:") ||
+        lowerPath.endsWith(".torrent") ||
+        lowerMime.contains("bittorrent")
+    ) {
+        return DownloadFolderCategory.TORRENT
+    }
+
+    if (dotExt in MediaPlatform.SUBTITLE_EXTENSIONS ||
+        MediaPlatform.SUBTITLE_EXTENSIONS.any { lowerPath.endsWith(it) } ||
+        lowerMime == "text/vtt" ||
+        lowerMime.contains("subrip") ||
+        lowerMime.contains("x-ass") ||
+        lowerMime.contains("x-ssa")
+    ) {
+        return DownloadFolderCategory.SUBTITLE
+    }
+
+    if (dotExt in MediaPlatform.INSTALLER_EXTENSIONS ||
+        MediaPlatform.INSTALLER_EXTENSIONS.any { lowerPath.endsWith(it) } ||
+        lowerMime.contains("android.package-archive") ||
+        lowerMime.contains("msdownload") ||
+        lowerMime.contains("dosexec") ||
+        lowerMime.contains("executable") ||
+        lowerMime.contains("x-msi") ||
+        lowerMime.contains("apple-diskimage") ||
+        lowerMime.contains("debian-package") ||
+        lowerMime.contains("x-rpm") ||
+        lowerMime.contains("java-archive")
+    ) {
+        return DownloadFolderCategory.PROGRAM
+    }
+
+    if (isAudioOnly ||
+        dotExt in MediaPlatform.AUDIO_EXTENSIONS ||
+        MediaPlatform.AUDIO_EXTENSIONS.any { lowerPath.endsWith(it) } ||
+        lowerMime.startsWith("audio/")
+    ) {
+        return DownloadFolderCategory.AUDIO
+    }
+
+    if (dotExt in MediaPlatform.ARCHIVE_EXTENSIONS ||
+        MediaPlatform.ARCHIVE_EXTENSIONS.any { lowerPath.endsWith(it) } ||
+        (lowerMime.contains("zip") && !lowerMime.contains("epub")) ||
+        lowerMime.contains("rar") ||
+        lowerMime.contains("7z") ||
+        lowerMime.contains("x-tar") ||
+        lowerMime.contains("gzip") ||
+        lowerMime.contains("bzip2") ||
+        lowerMime.contains("x-xz") ||
+        lowerMime.contains("zstd") ||
+        lowerMime.contains("iso9660")
+    ) {
+        return DownloadFolderCategory.COMPRESSED
+    }
+
+    if (dotExt in MediaPlatform.IMAGE_EXTENSIONS ||
+        MediaPlatform.IMAGE_EXTENSIONS.any { lowerPath.endsWith(it) } ||
+        lowerMime.startsWith("image/")
+    ) {
+        return DownloadFolderCategory.PHOTO
+    }
+
+    if (dotExt in MediaPlatform.DOCUMENT_EXTENSIONS ||
+        MediaPlatform.DOCUMENT_EXTENSIONS.any { lowerPath.endsWith(it) } ||
+        lowerMime.contains("pdf") ||
+        lowerMime.contains("msword") ||
+        lowerMime.contains("wordprocessingml") ||
+        lowerMime.contains("ms-excel") ||
+        lowerMime.contains("spreadsheetml") ||
+        lowerMime.contains("ms-powerpoint") ||
+        lowerMime.contains("presentationml") ||
+        lowerMime.contains("opendocument") ||
+        lowerMime.contains("epub") ||
+        lowerMime.contains("mobipocket") ||
+        lowerMime == "application/rtf" ||
+        lowerMime == "application/json" ||
+        lowerMime == "application/xml" ||
+        lowerMime.startsWith("text/")
+    ) {
+        return DownloadFolderCategory.DOCUMENT
+    }
+
+    if (dotExt in MediaPlatform.VIDEO_EXTENSIONS ||
+        MediaPlatform.VIDEO_EXTENSIONS.any { lowerPath.endsWith(it) } ||
+        lowerMime.startsWith("video/") ||
+        (!isGenericFile && !isAudioOnly)
+    ) {
+        return DownloadFolderCategory.VIDEO
+    }
+
+    return DownloadFolderCategory.OTHER
 }
 
 enum class DownloadStateStage(val displayLabel: String, val isTerminal: Boolean, val isActive: Boolean) {
@@ -300,7 +457,11 @@ data class DownloaderTask(
     val createdAtMs: Long = System.currentTimeMillis(),
     val isGenericFile: Boolean = false,
     val activeConnections: Int = 1,
-    val segmentProgress: List<Float> = emptyList()
+    val segmentProgress: List<Float> = emptyList(),
+    val retryCount: Int = 0,
+    val maxRetries: Int = 4,
+    val isSmartRetrying: Boolean = false,
+    val retryStatusText: String? = null
 ) {
     val downloadedSizeFormatted: String
         get() = formatBytes(downloadedBytes)
@@ -373,14 +534,21 @@ data class BatchSession(
 
 fun extractUrlsFromText(rawText: String): List<String> {
     if (rawText.isBlank()) return emptyList()
-    val pattern = Regex("(https?://[a-zA-Z0-9\\-_.~!*'();:@&=+$,/?#\\[\\]%]+)", RegexOption.IGNORE_CASE)
+    val pattern = Regex("((?:https?://|magnet:\\?)[a-zA-Z0-9\\-_.~!*'();:@&=+$,/?#\\[\\]%]+)", RegexOption.IGNORE_CASE)
     val matches = pattern.findAll(rawText).map { it.value.trim().trimEnd(',', ';', '"', '\'') }.distinct().toList()
     if (matches.isNotEmpty()) return matches
 
     // Fallback: split by lines or commas
     return rawText.split(Regex("[\r\n,;]+"))
         .map { it.trim() }
-        .filter { it.isNotBlank() && (it.startsWith("http://", true) || it.startsWith("https://", true) || it.contains(".")) }
+        .filter {
+            it.isNotBlank() && (
+                it.startsWith("http://", true) ||
+                    it.startsWith("https://", true) ||
+                    it.startsWith("magnet:", true) ||
+                    it.contains(".")
+                )
+        }
         .distinct()
 }
 

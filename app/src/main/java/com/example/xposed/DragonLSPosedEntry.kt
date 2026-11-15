@@ -284,7 +284,7 @@ class DragonLSPosedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
     }
 
-    @Volatile private var isGlobalEnabled: Boolean = true
+    @Volatile private var isGlobalEnabled: Boolean = false
     @Volatile private var blockVideoAds: Boolean = true
     @Volatile private var blockSponsoredPosts: Boolean = true
     @Volatile private var blockTelemetry: Boolean = true
@@ -321,7 +321,7 @@ class DragonLSPosedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
         try {
             val prefs = xPrefs ?: return
             if (reload) prefs.reload()
-            isGlobalEnabled = prefs.getBoolean("adblock_global_enabled", true)
+            isGlobalEnabled = prefs.getBoolean("adblock_global_enabled", false)
             blockVideoAds = prefs.getBoolean("adblock_video_ads", true)
             blockSponsoredPosts = prefs.getBoolean("adblock_sponsored", true)
             blockTelemetry = prefs.getBoolean("adblock_telemetry", true)

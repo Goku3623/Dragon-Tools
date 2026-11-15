@@ -51,16 +51,28 @@ class DragonDownloadManager(
     private val prefs = context.getSharedPreferences("dragon_universal_downloader", Context.MODE_PRIVATE)
 
     val warpDns = CloudflareWarpDns(
-        initialEnabled = prefs.getBoolean("cloudflare_warp_dns_enabled_v2", false)
+        initialEnabled = prefs.getBoolean("cloudflare_warp_dns_enabled_v2", false),
+        initialAdGuardDnsEnabled = prefs.getBoolean("adguard_default_dns_enabled_v1", false) &&
+            !prefs.getBoolean("cloudflare_warp_dns_enabled_v2", false),
+        initialUnfilteredAdGuardEnabled = prefs.getBoolean("unfiltered_adguard_dns_enabled_v1", false) &&
+            !prefs.getBoolean("cloudflare_warp_dns_enabled_v2", false) &&
+            !prefs.getBoolean("adguard_default_dns_enabled_v1", false)
     )
 
     private val _warpDnsEnabledFlow = MutableStateFlow(warpDns.isEnabled)
     val warpDnsEnabledFlow: StateFlow<Boolean> = _warpDnsEnabledFlow.asStateFlow()
 
+    private val _adGuardDnsEnabledFlow = MutableStateFlow(warpDns.isAdGuardDnsEnabled)
+    val adGuardDnsEnabledFlow: StateFlow<Boolean> = _adGuardDnsEnabledFlow.asStateFlow()
+
+    private val _unfilteredAdGuardDnsEnabledFlow = MutableStateFlow(warpDns.isUnfilteredAdGuardEnabled)
+    val unfilteredAdGuardDnsEnabledFlow: StateFlow<Boolean> = _unfilteredAdGuardDnsEnabledFlow.asStateFlow()
+
     val warpDnsTelemetryFlow: StateFlow<WarpDnsTelemetry> = warpDns.telemetryFlow
 
     val httpClient: OkHttpClient = IdmAcceleratedDownloader.createFastOkHttpClient(dns = warpDns)
     private val idmDownloader = IdmAcceleratedDownloader(httpClient)
+    val notificationController = DownloadNotificationController(context)
 
     val backendApiClient = BackendApiClient(httpClient)
     val webViewExtractor = WebViewMediaExtractor(context)
@@ -83,18 +95,24 @@ class DragonDownloadManager(
 
     init {
         loadPersistedTasks()
-        if (warpDns.isEnabled) {
+        if (warpDns.isAnyCustomDnsActive) {
             warpDns.prewarmCommonHosts(scope)
         }
     }
 
     fun setWarpDnsEnabled(enabled: Boolean) {
-        prefs.edit()
+        val editor = prefs.edit()
             .putBoolean("cloudflare_warp_dns_enabled_v2", enabled)
             .putBoolean("cloudflare_warp_dns_enabled", enabled)
-            .apply()
+        if (enabled) {
+            editor.putBoolean("adguard_default_dns_enabled_v1", false)
+            editor.putBoolean("unfiltered_adguard_dns_enabled_v1", false)
+        }
+        editor.apply()
         warpDns.setEnabled(enabled)
-        _warpDnsEnabledFlow.value = enabled
+        _warpDnsEnabledFlow.value = warpDns.isEnabled
+        _adGuardDnsEnabledFlow.value = warpDns.isAdGuardDnsEnabled
+        _unfilteredAdGuardDnsEnabledFlow.value = warpDns.isUnfilteredAdGuardEnabled
         if (enabled) {
             warpDns.prewarmCommonHosts(scope)
             onFeedback("Cloudflare WARP DNS (1.1.1.1) ON • Accelerated DoH + 0ms multi-thread DNS cache active")
@@ -109,11 +127,65 @@ class DragonDownloadManager(
         return next
     }
 
+    fun setAdGuardDnsEnabled(enabled: Boolean) {
+        val editor = prefs.edit()
+            .putBoolean("adguard_default_dns_enabled_v1", enabled)
+        if (enabled) {
+            editor.putBoolean("cloudflare_warp_dns_enabled_v2", false)
+            editor.putBoolean("cloudflare_warp_dns_enabled", false)
+            editor.putBoolean("unfiltered_adguard_dns_enabled_v1", false)
+        }
+        editor.apply()
+        warpDns.setAdGuardDnsEnabled(enabled)
+        _adGuardDnsEnabledFlow.value = warpDns.isAdGuardDnsEnabled
+        _warpDnsEnabledFlow.value = warpDns.isEnabled
+        _unfilteredAdGuardDnsEnabledFlow.value = warpDns.isUnfilteredAdGuardEnabled
+        if (enabled) {
+            warpDns.prewarmCommonHosts(scope)
+            onFeedback("AdGuard DNS (94.140.14.14) ON • Ad-filtering DoH + UDP resolver active")
+        } else {
+            onFeedback("AdGuard DNS OFF • Using standard system DNS")
+        }
+    }
+
+    fun toggleAdGuardDns(): Boolean {
+        val next = !_adGuardDnsEnabledFlow.value
+        setAdGuardDnsEnabled(next)
+        return next
+    }
+
+    fun setUnfilteredAdGuardDnsEnabled(enabled: Boolean) {
+        val editor = prefs.edit()
+            .putBoolean("unfiltered_adguard_dns_enabled_v1", enabled)
+        if (enabled) {
+            editor.putBoolean("cloudflare_warp_dns_enabled_v2", false)
+            editor.putBoolean("cloudflare_warp_dns_enabled", false)
+            editor.putBoolean("adguard_default_dns_enabled_v1", false)
+        }
+        editor.apply()
+        warpDns.setUnfilteredAdGuardEnabled(enabled)
+        _unfilteredAdGuardDnsEnabledFlow.value = warpDns.isUnfilteredAdGuardEnabled
+        _adGuardDnsEnabledFlow.value = warpDns.isAdGuardDnsEnabled
+        _warpDnsEnabledFlow.value = warpDns.isEnabled
+        if (enabled) {
+            warpDns.prewarmCommonHosts(scope)
+            onFeedback("Unfiltered AdGuard DNS (94.140.14.140) ON • Fast unfiltered DoH + UDP resolver active")
+        } else {
+            onFeedback("Unfiltered AdGuard DNS OFF • Using standard system DNS")
+        }
+    }
+
+    fun toggleUnfilteredAdGuardDns(): Boolean {
+        val next = !_unfilteredAdGuardDnsEnabledFlow.value
+        setUnfilteredAdGuardDnsEnabled(next)
+        return next
+    }
+
     fun setMaxConnections(count: Int) {
         val clamped = count.coerceIn(1, 16)
         prefs.edit().putInt("idm_max_connections", clamped).apply()
         _maxConnectionsFlow.value = clamped
-        onFeedback("IDM Multi-Connection Accelerator set to ${clamped}x parallel threads")
+        onFeedback("DDM Multi-Connection Accelerator set to ${clamped}x parallel threads")
     }
 
     fun setCustomBackendUrl(url: String) {
@@ -162,27 +234,103 @@ class DragonDownloadManager(
         const val DRAGON_TOOL_ROOT_FOLDER = "DragonTool"
         const val DRAGON_TOOL_DISPLAY_PATH = "Downloads/DragonTool"
 
+        val ALL_SUBFOLDERS: List<String> = DownloadFolderCategory.ALL_SUBFOLDERS
+
+        fun categoryForType(
+            extension: String = "",
+            mimeType: String = "",
+            isAudioOnly: Boolean = false,
+            isGenericFile: Boolean = false,
+            url: String = "",
+            platform: MediaPlatform? = null
+        ): DownloadFolderCategory {
+            return resolveDownloadFolderCategory(
+                extension = extension,
+                mimeType = mimeType,
+                isAudioOnly = isAudioOnly,
+                isGenericFile = isGenericFile,
+                url = url,
+                platform = platform
+            )
+        }
+
         fun subFolderForType(isAudioOnly: Boolean, isGenericFile: Boolean): String {
             return when {
-                isGenericFile -> "DragonTool/Files"
-                isAudioOnly -> "DragonTool/Audio"
-                else -> "DragonTool/Videos"
+                isAudioOnly -> DownloadFolderCategory.AUDIO.subFolderPath
+                isGenericFile -> DownloadFolderCategory.OTHER.subFolderPath
+                else -> DownloadFolderCategory.VIDEO.subFolderPath
             }
+        }
+
+        fun subFolderForType(
+            extension: String = "",
+            mimeType: String = "",
+            isAudioOnly: Boolean = false,
+            isGenericFile: Boolean = false,
+            url: String = "",
+            platform: MediaPlatform? = null
+        ): String {
+            return categoryForType(
+                extension = extension,
+                mimeType = mimeType,
+                isAudioOnly = isAudioOnly,
+                isGenericFile = isGenericFile,
+                url = url,
+                platform = platform
+            ).subFolderPath
         }
 
         fun displayFolderForType(isAudioOnly: Boolean, isGenericFile: Boolean): String {
             return "Downloads/${subFolderForType(isAudioOnly, isGenericFile)}"
         }
+
+        fun displayFolderForType(
+            extension: String = "",
+            mimeType: String = "",
+            isAudioOnly: Boolean = false,
+            isGenericFile: Boolean = false,
+            url: String = "",
+            platform: MediaPlatform? = null
+        ): String {
+            return categoryForType(
+                extension = extension,
+                mimeType = mimeType,
+                isAudioOnly = isAudioOnly,
+                isGenericFile = isGenericFile,
+                url = url,
+                platform = platform
+            ).displayPath
+        }
+
+        fun displayFolderForTask(task: DownloaderTask): String {
+            return displayFolderForType(
+                extension = task.container,
+                mimeType = task.mimeType,
+                isAudioOnly = task.isAudioOnly,
+                isGenericFile = task.isGenericFile,
+                url = task.url,
+                platform = task.platform
+            )
+        }
     }
 
     fun ensureDragonToolDirectories() {
-        listOf("DragonTool/Videos", "DragonTool/Audio", "DragonTool/Files").forEach { sub ->
+        val appDownloadsRoot = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
+        val publicDownloadsRoot = try {
+            @Suppress("DEPRECATION")
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        } catch (_: Exception) {
+            null
+        }
+        ALL_SUBFOLDERS.forEach { sub ->
             try {
-                File(
-                    context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir,
-                    sub
-                ).mkdirs()
+                File(appDownloadsRoot, sub).mkdirs()
             } catch (_: Exception) {}
+            if (publicDownloadsRoot != null) {
+                try {
+                    File(publicDownloadsRoot, sub).mkdirs()
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -196,6 +344,7 @@ class DragonDownloadManager(
         val taskId = UUID.randomUUID().toString()
         val ext = format.container.lowercase(Locale.US).ifBlank {
             when {
+                mediaInfo.platform == MediaPlatform.TORRENT || format.streamUrl.startsWith("magnet:", true) -> "torrent"
                 format.isAudioOnly -> "m4a"
                 format.isGenericFile -> "bin"
                 else -> "mp4"
@@ -210,6 +359,9 @@ class DragonDownloadManager(
             "ogg", "opus" -> "audio/ogg"
             "webm" -> if (format.isAudioOnly) "audio/webm" else "video/webm"
             "mkv" -> "video/x-matroska"
+            "torrent" -> "application/x-bittorrent"
+            "srt" -> "application/x-subrip"
+            "vtt" -> "text/vtt"
             else -> if (format.isGenericFile) {
                 format.mimeType.ifBlank { "application/octet-stream" }
             } else {
@@ -223,6 +375,9 @@ class DragonDownloadManager(
             ext = ext,
             isAudioOnly = format.isAudioOnly,
             isGenericFile = format.isGenericFile,
+            mimeType = mimeType,
+            url = format.streamUrl,
+            platform = mediaInfo.platform,
             customFilename = customFilename
         )
 
@@ -256,7 +411,9 @@ class DragonDownloadManager(
             activeConnections = _maxConnectionsFlow.value
         )
 
+        notificationController.onNewDownloadStarted()
         _tasksFlow.value = listOf(newTask) + _tasksFlow.value
+        notificationController.syncTasks(_tasksFlow.value, force = true)
         persistTasks()
         launchDownloadWorker(newTask)
         return taskId
@@ -270,6 +427,10 @@ class DragonDownloadManager(
             val tempSecondaryAudioFile = File(workDir, "secondary_audio.tmp")
             val tempProcessedFile = File(workDir, "processed_output.${task.container}")
 
+            var activeFormat = task.formatOption
+            var smartRetryAttempt = task.retryCount
+            val maxSmartRetries = task.maxRetries.coerceAtLeast(4)
+
             try {
                 // Check available storage space
                 val requiredBytes = task.totalBytes.coerceAtLeast(10L * 1024L * 1024L)
@@ -280,13 +441,25 @@ class DragonDownloadManager(
                     )
                 }
 
-                val fmt = task.formatOption
-                val customBackendUrl = _backendUrlFlow.value.takeIf { it.isNotBlank() }
+                while (true) {
+                    val curTaskCheck = _tasksFlow.value.find { it.id == taskId }
+                    if (curTaskCheck == null || curTaskCheck.stage == DownloadStateStage.PAUSED) {
+                        throw CancellationException("Download paused or cancelled")
+                    }
 
-                // If using Backend API job pipeline
-                if (customBackendUrl != null && fmt.streamUrl.startsWith(customBackendUrl)) {
-                    executeBackendJobDownload(task, customBackendUrl, tempProcessedFile)
-                } else if (task.isGenericFile) {
+                    try {
+                        val fmt = activeFormat
+                        val customBackendUrl = _backendUrlFlow.value.takeIf { it.isNotBlank() }
+
+                        // If using Backend API job pipeline
+                        if (customBackendUrl != null && fmt.streamUrl.startsWith(customBackendUrl)) {
+                            executeBackendJobDownload(task.copy(formatOption = fmt), customBackendUrl, tempProcessedFile)
+                        } else if (fmt.id == "torrent_p2p_payload" || fmt.streamUrl.startsWith("magnet:", ignoreCase = true)) {
+                            // BIT-TORRENT / MAGNET P2P & WEBSEED DOWNLOAD PIPELINE -> DragonTool/Torrent
+                            executeTorrentDownloadTask(task.copy(formatOption = fmt), workDir)
+                            try { workDir.deleteRecursively() } catch (_: Exception) {}
+                            return@launch
+                        } else if (task.isGenericFile) {
                     // UNIVERSAL IDM MULTI-CONNECTION FILE DOWNLOAD PIPELINE
                     updateTask(taskId) {
                         it.copy(
@@ -499,7 +672,7 @@ class DragonDownloadManager(
                         val audioDeferred = async(Dispatchers.IO) {
                             downloadStreamWithFailover(
                                 taskId = taskId,
-                                primaryUrl = fmt.secondaryAudioStreamUrl,
+                                primaryUrl = fmt.secondaryAudioStreamUrl.orEmpty(),
                                 fallbackUrls = emptyList(),
                                 headers = fmt.requestHeaders,
                                 destFile = tempSecondaryAudioFile,
@@ -732,48 +905,168 @@ class DragonDownloadManager(
                     )
                 }
 
-                // 5. Save verified file to DragonTool folder and MediaStore
+                // 5. Save verified file to DragonTool categorized subfolder and MediaStore
                 val savedResult = saveToDragonToolDownloads(
                     sourceFile = tempProcessedFile,
                     filename = task.filename,
                     mimeType = task.mimeType,
                     isAudioOnly = task.isAudioOnly,
-                    isGenericFile = task.isGenericFile
+                    isGenericFile = task.isGenericFile,
+                    extension = task.container,
+                    url = task.url,
+                    platform = task.platform
                 )
 
                 // Clean up temporary work directory
                 try { workDir.deleteRecursively() } catch (_: Exception) {}
 
-                val finalBytes = savedResult.first.length()
-                updateTask(taskId) {
-                    it.copy(
-                        stage = DownloadStateStage.COMPLETED,
-                        progress = 1.0f,
-                        speedBytesPerSec = 0L,
-                        speedFormatted = "Completed",
-                        downloadedBytes = finalBytes,
-                        totalBytes = finalBytes,
-                        isTotalSizeEstimated = false,
-                        etaSeconds = 0L,
-                        etaFormatted = "Done",
-                        segmentProgress = emptyList(),
-                        filePath = savedResult.first.absolutePath,
-                        publicUriString = savedResult.second?.toString(),
-                        verifiedResolution = if (task.isGenericFile) "${task.container.uppercase(Locale.US)} File" else report.resolutionLabel,
-                        verifiedDuration = report.durationFormatted,
-                        verifiedCodec = if (task.isGenericFile) task.mimeType else report.codecSummary,
-                        errorType = null,
-                        errorMessage = null
-                    )
+                        val finalBytes = savedResult.first.length()
+                        updateTask(taskId) {
+                            it.copy(
+                                stage = DownloadStateStage.COMPLETED,
+                                progress = 1.0f,
+                                speedBytesPerSec = 0L,
+                                speedFormatted = "Completed",
+                                downloadedBytes = finalBytes,
+                                totalBytes = finalBytes,
+                                isTotalSizeEstimated = false,
+                                etaSeconds = 0L,
+                                etaFormatted = "Done",
+                                segmentProgress = emptyList(),
+                                isSmartRetrying = false,
+                                retryStatusText = if (smartRetryAttempt > 0) "Recovered via Smart Retry (#$smartRetryAttempt)" else null,
+                                filePath = savedResult.first.absolutePath,
+                                publicUriString = savedResult.second?.toString(),
+                                verifiedResolution = if (task.isGenericFile) "${task.container.uppercase(Locale.US)} File" else report.resolutionLabel,
+                                verifiedDuration = report.durationFormatted,
+                                verifiedCodec = if (task.isGenericFile) task.mimeType else report.codecSummary,
+                                errorType = null,
+                                errorMessage = null
+                            )
+                        }
+                        notificationController.syncTasks(_tasksFlow.value, force = true)
+                        persistTasks()
+                        val folderLabel = displayFolderForTask(task)
+                        onFeedback("Saved to $folderLabel: ${task.filename} (${formatBytes(finalBytes)})")
+                        break
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (attemptError: Exception) {
+                        val currentTaskState = _tasksFlow.value.find { it.id == taskId }
+                        if (currentTaskState == null || currentTaskState.stage == DownloadStateStage.PAUSED) {
+                            throw CancellationException("Download paused or cancelled")
+                        }
+
+                        val nonRetryable = attemptError is ExtractorException && (
+                            attemptError.errorType == DownloaderErrorType.INSUFFICIENT_STORAGE ||
+                                attemptError.errorType == DownloaderErrorType.DRM_PROTECTED ||
+                                attemptError.errorType == DownloaderErrorType.INVALID_URL
+                            )
+
+                        if (nonRetryable || smartRetryAttempt >= maxSmartRetries) {
+                            throw attemptError
+                        }
+
+                        smartRetryAttempt++
+                        val isExpiredOrDenied = (attemptError is ExtractorException &&
+                            (attemptError.errorType == DownloaderErrorType.EXPIRED_LINK ||
+                                attemptError.errorType == DownloaderErrorType.PRIVATE_OR_RESTRICTED)) ||
+                            attemptError.message?.contains("403") == true ||
+                            attemptError.message?.contains("410") == true
+
+                        val isDnsOrTimeout = attemptError is java.net.UnknownHostException ||
+                            attemptError is java.net.SocketTimeoutException ||
+                            attemptError is java.net.ConnectException
+
+                        val reducedThreads = when (smartRetryAttempt) {
+                            1 -> _maxConnectionsFlow.value.coerceIn(1, 16)
+                            2 -> (_maxConnectionsFlow.value / 2).coerceIn(2, 8)
+                            else -> 1
+                        }
+
+                        val recoveryReason = when {
+                            isExpiredOrDenied -> "Refreshing expired CDN link & session"
+                            isDnsOrTimeout -> "DNS failover + socket reconnect (${reducedThreads}x)"
+                            else -> "Auto-resuming byte range (${reducedThreads}x threads)"
+                        }
+
+                        updateTask(taskId) {
+                            it.copy(
+                                retryCount = smartRetryAttempt,
+                                maxRetries = maxSmartRetries,
+                                isSmartRetrying = true,
+                                activeConnections = reducedThreads,
+                                retryStatusText = "Smart Retry $smartRetryAttempt/$maxSmartRetries: $recoveryReason",
+                                speedBytesPerSec = 0L,
+                                speedFormatted = "Smart Retry $smartRetryAttempt/$maxSmartRetries...",
+                                errorType = null,
+                                errorMessage = null
+                            )
+                        }
+                        notificationController.syncTasks(_tasksFlow.value, force = true)
+
+                        // 1. Prewarm DNS cache if network/DNS hiccup occurred
+                        if (isDnsOrTimeout || warpDns.isAnyCustomDnsActive) {
+                            try {
+                                val targetHost = java.net.URI(activeFormat.streamUrl).host
+                                if (!targetHost.isNullOrBlank()) {
+                                    warpDns.prewarmHostAsync(targetHost)
+                                }
+                            } catch (_: Exception) {}
+                        }
+
+                        // 2. Exponential backoff with jitter before reconnecting
+                        val backoffMs = (900L * (1 shl (smartRetryAttempt - 1))).coerceAtMost(6000L)
+                        delay(backoffMs)
+
+                        // 3. Re-extract fresh stream URL if link expired (403/410) or on retry >= 2
+                        if ((isExpiredOrDenied || smartRetryAttempt >= 2) && !task.isGenericFile) {
+                            try {
+                                val backendUrl = _backendUrlFlow.value.takeIf { it.isNotBlank() }
+                                val refreshedInfo = extractionEngine.extractMediaInfo(task.url, backendUrl)
+                                val matched = refreshedInfo.allFormats.firstOrNull {
+                                    it.qualityLabel == task.qualityLabel ||
+                                        (it.resolutionHeight == activeFormat.resolutionHeight && it.isAudioOnly == task.isAudioOnly)
+                                } ?: if (task.isAudioOnly) {
+                                    refreshedInfo.audioFormats.firstOrNull()
+                                } else {
+                                    refreshedInfo.videoFormats.firstOrNull()
+                                } ?: refreshedInfo.allFormats.firstOrNull()
+
+                                if (matched != null && matched.streamUrl.isNotBlank()) {
+                                    activeFormat = matched
+                                    updateTask(taskId) {
+                                        it.copy(
+                                            formatOption = matched,
+                                            retryStatusText = "Smart Retry $smartRetryAttempt/$maxSmartRetries: Fresh CDN link acquired"
+                                        )
+                                    }
+                                }
+                            } catch (_: Exception) {}
+                        }
+
+                        // Resume download stage
+                        val resumeStage = when {
+                            task.isGenericFile -> DownloadStateStage.DOWNLOADING_FILE
+                            task.isAudioOnly -> DownloadStateStage.DOWNLOADING_AUDIO
+                            else -> DownloadStateStage.DOWNLOADING_VIDEO
+                        }
+                        updateTask(taskId) {
+                            it.copy(
+                                stage = resumeStage,
+                                isSmartRetrying = false,
+                                speedFormatted = "Reconnecting ($smartRetryAttempt/$maxSmartRetries)..."
+                            )
+                        }
+                        notificationController.syncTasks(_tasksFlow.value, force = true)
+                    }
                 }
-                persistTasks()
-                val folderLabel = displayFolderForType(task.isAudioOnly, task.isGenericFile)
-                onFeedback("Saved to $folderLabel: ${task.filename} (${formatBytes(finalBytes)})")
             } catch (ce: CancellationException) {
                 val current = _tasksFlow.value.find { it.id == taskId }
                 if (current == null) {
                     try { workDir.deleteRecursively() } catch (_: Exception) {}
                 }
+                notificationController.syncTasks(_tasksFlow.value, force = true)
             } catch (e: ExtractorException) {
                 try { tempProcessedFile.delete() } catch (_: Exception) {}
                 updateTask(taskId) {
@@ -782,10 +1075,14 @@ class DragonDownloadManager(
                         speedBytesPerSec = 0L,
                         speedFormatted = "Failed",
                         etaFormatted = "--",
+                        isSmartRetrying = false,
+                        retryCount = smartRetryAttempt,
+                        retryStatusText = if (smartRetryAttempt > 0) "Smart Retry exhausted ($smartRetryAttempt/$maxSmartRetries)" else null,
                         errorType = e.errorType,
                         errorMessage = e.message
                     )
                 }
+                notificationController.syncTasks(_tasksFlow.value, force = true)
                 persistTasks()
                 onFeedback("Download failed: ${e.message}")
             } catch (e: Exception) {
@@ -800,10 +1097,14 @@ class DragonDownloadManager(
                         speedBytesPerSec = 0L,
                         speedFormatted = "Failed",
                         etaFormatted = "--",
+                        isSmartRetrying = false,
+                        retryCount = smartRetryAttempt,
+                        retryStatusText = if (smartRetryAttempt > 0) "Smart Retry exhausted ($smartRetryAttempt/$maxSmartRetries)" else null,
                         errorType = errType,
                         errorMessage = e.message ?: "Download interrupted."
                     )
                 }
+                notificationController.syncTasks(_tasksFlow.value, force = true)
                 persistTasks()
                 onFeedback("Download failed: ${e.message}")
             } finally {
@@ -1037,22 +1338,42 @@ class DragonDownloadManager(
                     etaFormatted = formatEtaSeconds(etaSec),
                     supportsPauseResume = upd.supportsResume,
                     activeConnections = upd.activeConnections,
-                    segmentProgress = upd.segmentProgress
+                    segmentProgress = upd.segmentProgress,
+                    isSmartRetrying = false
                 )
             }
+        }
+
+        val curTaskSnapshot = _tasksFlow.value.find { it.id == taskId }
+        val effectiveMaxConns = if ((curTaskSnapshot?.retryCount ?: 0) >= 2) {
+            curTaskSnapshot?.activeConnections?.coerceIn(1, _maxConnectionsFlow.value) ?: _maxConnectionsFlow.value
+        } else {
+            _maxConnectionsFlow.value
         }
 
         val outcome = idmDownloader.downloadWithAcceleration(
             url = normalizedUrl,
             destFile = destFile,
             workDir = workDir,
-            maxConnections = _maxConnectionsFlow.value,
+            maxConnections = effectiveMaxConns,
             knownTotalBytes = knownTotalBytes,
             rejectHtml = rejectHtml,
             requestHeadersProvider = { targetUrl -> buildScopedStreamHeaders(targetUrl, headers) },
             isPausedOrCancelled = {
                 val curTask = _tasksFlow.value.find { it.id == taskId }
                 curTask == null || curTask.stage == DownloadStateStage.PAUSED
+            },
+            onSmartRetry = { attempt, maxAttempts, reason ->
+                updateTask(taskId) {
+                    it.copy(
+                        retryCount = maxOf(it.retryCount, attempt),
+                        maxRetries = maxOf(it.maxRetries, maxAttempts),
+                        isSmartRetrying = true,
+                        retryStatusText = "Smart Retry $attempt/$maxAttempts: $reason",
+                        speedFormatted = "Smart Retry $attempt/$maxAttempts..."
+                    )
+                }
+                notificationController.syncTasks(_tasksFlow.value, force = true)
             },
             onProgress = progressHandler
         )
@@ -1478,14 +1799,140 @@ class DragonDownloadManager(
         return destFile.length()
     }
 
+    private fun executeTorrentDownloadTask(task: DownloaderTask, workDir: File) {
+        val taskId = task.id
+        val torrentSubFolder = DownloadFolderCategory.TORRENT.subFolderPath
+        val stagingOutput = File(workDir, "torrent_output").apply { mkdirs() }
+        val startedMs = SystemClock.elapsedRealtime()
+
+        updateTask(taskId) {
+            it.copy(
+                stage = DownloadStateStage.DOWNLOADING_FILE,
+                speedFormatted = "Starting BitTorrent..."
+            )
+        }
+
+        val output = TorrentEngine.downloadTorrentContent(
+            sourceUrlOrMagnet = task.formatOption.streamUrl,
+            httpClient = httpClient,
+            outputDir = stagingOutput,
+            isCancelled = { activeJobs[taskId]?.isActive != true }
+        ) { p ->
+            val elapsedSec = ((SystemClock.elapsedRealtime() - startedMs) / 1000.0).coerceAtLeast(0.4)
+            val speed = (p.downloadedBytes / elapsedSec).toLong().coerceAtLeast(0L)
+            val frac = if (p.totalBytes > 0L) (p.downloadedBytes.toFloat() / p.totalBytes.toFloat()).coerceIn(0f, 0.99f) else -1f
+            updateTask(taskId) {
+                it.copy(
+                    downloadedBytes = p.downloadedBytes,
+                    totalBytes = if (p.totalBytes > 0L) p.totalBytes else it.totalBytes,
+                    progress = frac,
+                    speedBytesPerSec = speed,
+                    speedFormatted = if (speed > 0L) "${formatBytes(speed)}/s • ${p.statusLabel}" else p.statusLabel
+                )
+            }
+        }
+
+        val appTorrentDir = File(
+            context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir,
+            torrentSubFolder
+        ).apply { mkdirs() }
+
+        val savedLocalFiles = mutableListOf<File>()
+        var firstPublicUri: Uri? = null
+
+        output.allSavedFiles.forEach { src ->
+            val rel = src.relativeTo(stagingOutput).path
+            val destLocal = File(appTorrentDir, rel).apply { parentFile?.mkdirs() }
+            src.copyTo(destLocal, overwrite = true)
+            savedLocalFiles.add(destLocal)
+
+            val parentPath = destLocal.parentFile?.absolutePath ?: ""
+            val baseDownloadsPath = (context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir).absolutePath
+            val subRelativeDir = if (parentPath.startsWith(baseDownloadsPath)) {
+                parentPath.removePrefix(baseDownloadsPath).removePrefix("/").ifBlank { torrentSubFolder }
+            } else {
+                torrentSubFolder
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    val resolver = context.contentResolver
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, destLocal.name)
+                        put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                        put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/$subRelativeDir")
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    if (uri != null) {
+                        resolver.openOutputStream(uri)?.use { out ->
+                            FileInputStream(destLocal).use { input -> input.copyTo(out, bufferSize = 32 * 1024) }
+                        }
+                        values.clear()
+                        values.put(MediaStore.Downloads.IS_PENDING, 0)
+                        resolver.update(uri, values, null, null)
+                        if (firstPublicUri == null) firstPublicUri = uri
+                    }
+                } catch (_: Exception) {}
+            } else {
+                try {
+                    @Suppress("DEPRECATION")
+                    val pubRoot = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    val pubFile = File(File(pubRoot, subRelativeDir).apply { mkdirs() }, destLocal.name)
+                    destLocal.copyTo(pubFile, overwrite = true)
+                    MediaScannerConnection.scanFile(context, arrayOf(pubFile.absolutePath), null, null)
+                } catch (_: Exception) {}
+            }
+        }
+
+        val primarySaved = savedLocalFiles.firstOrNull() ?: output.primaryFile
+        val totalLen = savedLocalFiles.sumOf { it.length() }.coerceAtLeast(output.totalBytes)
+        val displayTitle = primarySaved.name
+        updateTask(taskId) {
+            it.copy(
+                filename = displayTitle,
+                stage = DownloadStateStage.COMPLETED,
+                progress = 1.0f,
+                speedBytesPerSec = 0L,
+                speedFormatted = "Completed",
+                downloadedBytes = totalLen,
+                totalBytes = totalLen,
+                isTotalSizeEstimated = false,
+                etaSeconds = 0L,
+                etaFormatted = "Done",
+                segmentProgress = emptyList(),
+                filePath = primarySaved.absolutePath,
+                publicUriString = firstPublicUri?.toString(),
+                verifiedResolution = "${savedLocalFiles.size} Torrent File(s)",
+                verifiedDuration = "Torrent P2P",
+                verifiedCodec = "BitTorrent",
+                errorType = null,
+                errorMessage = null
+            )
+        }
+        persistTasks()
+        onFeedback("Saved to ${DownloadFolderCategory.TORRENT.displayPath}: $displayTitle (${formatBytes(totalLen)})")
+    }
+
     private fun saveToDragonToolDownloads(
         sourceFile: File,
         filename: String,
         mimeType: String,
         isAudioOnly: Boolean,
-        isGenericFile: Boolean = false
+        isGenericFile: Boolean = false,
+        extension: String = "",
+        url: String = "",
+        platform: MediaPlatform? = null
     ): Pair<File, Uri?> {
-        val subFolder = subFolderForType(isAudioOnly, isGenericFile)
+        val resolvedExt = extension.ifBlank { filename.substringAfterLast('.', "") }
+        val subFolder = subFolderForType(
+            extension = resolvedExt,
+            mimeType = mimeType,
+            isAudioOnly = isAudioOnly,
+            isGenericFile = isGenericFile,
+            url = url,
+            platform = platform
+        )
         val appExternalDir = File(
             context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir,
             subFolder
@@ -1520,6 +1967,7 @@ class DragonDownloadManager(
             } catch (_: Exception) {}
         } else {
             try {
+                @Suppress("DEPRECATION")
                 val publicDir = File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
                     subFolder
@@ -1536,16 +1984,18 @@ class DragonDownloadManager(
 
     fun pauseDownload(taskId: String) {
         updateTask(taskId) {
-            if (it.stage.isActive) {
+            if (it.stage.isActive || it.isSmartRetrying) {
                 it.copy(
                     stage = DownloadStateStage.PAUSED,
                     speedBytesPerSec = 0L,
                     speedFormatted = "Paused",
-                    etaFormatted = "Paused"
+                    etaFormatted = "Paused",
+                    isSmartRetrying = false
                 )
             } else it
         }
         activeJobs.remove(taskId)?.cancel()
+        notificationController.syncTasks(_tasksFlow.value, force = true)
         persistTasks()
     }
 
@@ -1553,6 +2003,7 @@ class DragonDownloadManager(
         val task = _tasksFlow.value.find { it.id == taskId } ?: return
         if (task.stage != DownloadStateStage.PAUSED && task.stage != DownloadStateStage.FAILED) return
 
+        notificationController.onNewDownloadStarted()
         val resumedStage = when {
             task.isGenericFile -> DownloadStateStage.DOWNLOADING_FILE
             task.isAudioOnly -> DownloadStateStage.DOWNLOADING_AUDIO
@@ -1561,86 +2012,97 @@ class DragonDownloadManager(
         val updated = task.copy(
             stage = resumedStage,
             speedFormatted = "Resuming...",
+            isSmartRetrying = false,
             errorType = null,
             errorMessage = null
         )
         updateTask(taskId) { updated }
+        notificationController.syncTasks(_tasksFlow.value, force = true)
         launchDownloadWorker(updated)
     }
 
     fun retryDownload(taskId: String) {
         val task = _tasksFlow.value.find { it.id == taskId } ?: return
         activeJobs.remove(taskId)?.cancel()
+        notificationController.onNewDownloadStarted()
 
-        // If the stream link expired, re-extract fresh URL before retrying
-        if (task.errorType == DownloaderErrorType.EXPIRED_LINK) {
-            updateTask(taskId) {
-                it.copy(
-                    stage = DownloadStateStage.FETCHING_METADATA,
-                    speedFormatted = "Refreshing link...",
-                    errorType = null,
-                    errorMessage = null
-                )
-            }
+        // Smart Retry preserves valid partial chunk progress unless explicitly corrupted,
+        // and automatically refreshes expired links inside launchDownloadWorker.
+        val nextRetryCount = (task.retryCount + 1).coerceAtLeast(1)
+        val resetStage = when {
+            task.isGenericFile -> DownloadStateStage.DOWNLOADING_FILE
+            task.isAudioOnly -> DownloadStateStage.DOWNLOADING_AUDIO
+            else -> DownloadStateStage.DOWNLOADING_VIDEO
+        }
+
+        val updatedTask = task.copy(
+            stage = resetStage,
+            speedBytesPerSec = 0L,
+            speedFormatted = "Smart Retry #$nextRetryCount...",
+            retryCount = nextRetryCount,
+            isSmartRetrying = true,
+            retryStatusText = "Smart Retry #$nextRetryCount: Verifying byte range & refreshing CDN...",
+            errorType = null,
+            errorMessage = null
+        )
+        updateTask(taskId) { updatedTask }
+        notificationController.syncTasks(_tasksFlow.value, force = true)
+
+        if (task.errorType == DownloaderErrorType.EXPIRED_LINK && !task.isGenericFile) {
             fetchMediaInfo(
                 url = task.url,
                 onStageChanged = {},
-                onResult = { refreshedInfo, errType, errMsg ->
-                    if (refreshedInfo != null) {
-                        val matchingFmt = refreshedInfo.allFormats.firstOrNull {
-                            it.qualityLabel == task.qualityLabel || it.resolutionHeight == task.formatOption.resolutionHeight
-                        } ?: refreshedInfo.allFormats.firstOrNull()
+                onResult = { refreshedInfo, _, _ ->
+                    val matchingFmt = refreshedInfo?.allFormats?.firstOrNull {
+                        it.qualityLabel == task.qualityLabel || it.resolutionHeight == task.formatOption.resolutionHeight
+                    } ?: refreshedInfo?.allFormats?.firstOrNull()
 
-                        if (matchingFmt != null) {
-                            val updatedTask = task.copy(
-                                formatOption = matchingFmt,
-                                stage = when {
-                                    task.isGenericFile -> DownloadStateStage.DOWNLOADING_FILE
-                                    task.isAudioOnly -> DownloadStateStage.DOWNLOADING_AUDIO
-                                    else -> DownloadStateStage.DOWNLOADING_VIDEO
-                                },
-                                progress = 0f,
-                                downloadedBytes = 0L,
-                                segmentProgress = emptyList(),
-                                errorType = null,
-                                errorMessage = null
-                            )
-                            updateTask(taskId) { updatedTask }
-                            launchDownloadWorker(updatedTask)
-                            return@fetchMediaInfo
-                        }
-                    }
-                    updateTask(taskId) {
-                        it.copy(
-                            stage = DownloadStateStage.FAILED,
-                            errorType = errType ?: DownloaderErrorType.EXPIRED_LINK,
-                            errorMessage = errMsg ?: "Could not refresh expired link."
+                    val taskToRun = if (matchingFmt != null) {
+                        updatedTask.copy(
+                            formatOption = matchingFmt,
+                            retryStatusText = "Smart Retry #$nextRetryCount: Fresh CDN link acquired"
                         )
+                    } else {
+                        updatedTask
                     }
+                    updateTask(taskId) { taskToRun }
+                    launchDownloadWorker(taskToRun)
                 }
             )
             return
         }
 
-        val workDir = File(context.cacheDir, "downloader_work/$taskId")
-        try { workDir.deleteRecursively() } catch (_: Exception) {}
+        launchDownloadWorker(updatedTask)
+    }
 
-        val resetTask = task.copy(
-            stage = when {
-                task.isGenericFile -> DownloadStateStage.DOWNLOADING_FILE
-                task.isAudioOnly -> DownloadStateStage.DOWNLOADING_AUDIO
-                else -> DownloadStateStage.DOWNLOADING_VIDEO
-            },
-            progress = 0f,
-            downloadedBytes = 0L,
-            speedBytesPerSec = 0L,
-            speedFormatted = "Retrying...",
-            segmentProgress = emptyList(),
-            errorType = null,
-            errorMessage = null
-        )
-        updateTask(taskId) { resetTask }
-        launchDownloadWorker(resetTask)
+    fun pauseAllDownloads() {
+        val activeIds = _tasksFlow.value.filter { it.stage.isActive || it.isSmartRetrying }.map { it.id }
+        activeIds.forEach { pauseDownload(it) }
+        if (activeIds.isNotEmpty()) {
+            onFeedback("Paused ${activeIds.size} active download(s)")
+        }
+    }
+
+    fun resumeAllDownloads() {
+        val pausedIds = _tasksFlow.value.filter { it.stage == DownloadStateStage.PAUSED }.map { it.id }
+        pausedIds.forEach { resumeDownload(it) }
+        if (pausedIds.isNotEmpty()) {
+            onFeedback("Resumed ${pausedIds.size} download(s)")
+        }
+    }
+
+    fun smartRetryAllFailed() {
+        val failedIds = _tasksFlow.value.filter { it.stage == DownloadStateStage.FAILED }.map { it.id }
+        if (failedIds.isEmpty()) {
+            onFeedback("No failed downloads to retry.")
+            return
+        }
+        failedIds.forEach { retryDownload(it) }
+        onFeedback("Smart Retrying ${failedIds.size} failed download(s)...")
+    }
+
+    fun dismissNotificationPanel() {
+        notificationController.dismissPanel()
     }
 
     fun cancelDownload(taskId: String) {
@@ -1658,6 +2120,7 @@ class DragonDownloadManager(
         try { workDir.deleteRecursively() } catch (_: Exception) {}
 
         _tasksFlow.value = _tasksFlow.value.filter { it.id != taskId }
+        notificationController.syncTasks(_tasksFlow.value, force = true)
         persistTasks()
     }
 
@@ -1725,7 +2188,10 @@ class DragonDownloadManager(
         qualityLabel: String,
         ext: String,
         isAudioOnly: Boolean = false,
-        isGenericFile: Boolean = false
+        isGenericFile: Boolean = false,
+        mimeType: String = "",
+        url: String = "",
+        platform: MediaPlatform? = null
     ): String {
         return buildUniqueFilename(
             title = title,
@@ -1733,6 +2199,9 @@ class DragonDownloadManager(
             ext = ext,
             isAudioOnly = isAudioOnly,
             isGenericFile = isGenericFile,
+            mimeType = mimeType,
+            url = url,
+            platform = platform,
             customFilename = null
         )
     }
@@ -1743,9 +2212,19 @@ class DragonDownloadManager(
         ext: String,
         isAudioOnly: Boolean = false,
         isGenericFile: Boolean = false,
+        mimeType: String = "",
+        url: String = "",
+        platform: MediaPlatform? = null,
         customFilename: String? = null
     ): String {
-        val subFolder = subFolderForType(isAudioOnly, isGenericFile)
+        val subFolder = subFolderForType(
+            extension = ext,
+            mimeType = mimeType,
+            isAudioOnly = isAudioOnly,
+            isGenericFile = isGenericFile,
+            url = url,
+            platform = platform
+        )
         val appDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, subFolder).apply { mkdirs() }
 
         val sanitizedCustom = customFilename
@@ -1838,6 +2317,7 @@ class DragonDownloadManager(
         _tasksFlow.value = _tasksFlow.value.map {
             if (it.id == taskId) updater(it) else it
         }
+        notificationController.syncTasks(_tasksFlow.value, force = false)
     }
 
     private fun persistTasks() {
@@ -1950,9 +2430,13 @@ class DragonDownloadManager(
     // =========================================================================
 
     fun startBatchDownload(urls: List<String>, config: BatchDownloadConfig): String {
-        val validUrls = urls.map { it.trim() }.filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+        val validUrls = urls.map { it.trim() }.filter {
+            it.startsWith("http://", ignoreCase = true) ||
+                it.startsWith("https://", ignoreCase = true) ||
+                it.startsWith("magnet:", ignoreCase = true)
+        }
         if (validUrls.isEmpty()) {
-            onFeedback("No valid HTTP/HTTPS media URLs found for batch download.")
+            onFeedback("No valid HTTP/HTTPS or Magnet URLs found for batch download.")
             return ""
         }
         val sessionId = "batch_" + UUID.randomUUID().toString().take(8)

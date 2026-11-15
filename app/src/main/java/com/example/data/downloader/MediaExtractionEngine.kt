@@ -61,6 +61,9 @@ class MediaExtractionEngine(
         if (trimmed.isEmpty()) {
             throw ExtractorException(DownloaderErrorType.INVALID_URL, "Please enter a media URL.")
         }
+        if (trimmed.startsWith("magnet:", ignoreCase = true)) {
+            return extractMagnetTorrentMedia(trimmed)
+        }
         val normalizedUrl = if (!trimmed.startsWith("http://", true) && !trimmed.startsWith("https://", true)) {
             "https://$trimmed"
         } else {
@@ -101,7 +104,7 @@ class MediaExtractionEngine(
             if (it == MediaPlatform.OTHER && initialPlatform != MediaPlatform.OTHER) initialPlatform else it
         }
 
-        // 3. Check if the URL points directly to a binary video/audio stream
+        // 3. Check if the URL points directly to a binary video/audio/file stream
         val directProbeHeaders = when (platform) {
             MediaPlatform.PATREON -> buildCookieHeaders(resolvedUrl, mapOf("Referer" to "https://www.patreon.com/"))
             MediaPlatform.BILIBILI -> buildCookieHeaders(
@@ -121,6 +124,15 @@ class MediaExtractionEngine(
             else -> buildCookieHeaders(resolvedUrl)
         }
         val probe = probeStreamHeaders(resolvedUrl, directProbeHeaders)
+        val isTorrentEndpoint = platform == MediaPlatform.TORRENT ||
+            (probe != null && (
+                probe.contentType.contains("bittorrent", ignoreCase = true) ||
+                    probe.finalUrl.substringBefore("?").lowercase(Locale.US).endsWith(".torrent") ||
+                    (probe.filenameFromHeader?.lowercase(Locale.US)?.endsWith(".torrent") == true)
+                ))
+        if (isTorrentEndpoint) {
+            return extractDotTorrentMedia(normalizedUrl, probe?.finalUrl ?: resolvedUrl, probe)
+        }
         if (probe != null && isBinaryMediaMime(probe.contentType, probe.finalUrl, probe.filenameFromHeader)) {
             return enrichMediaInfoWithDetailedFormats(
                 extractDirectMedia(
@@ -153,6 +165,8 @@ class MediaExtractionEngine(
                 extractBilibiliMedia(normalizedUrl, resolvedUrl)
             MediaPlatform.PAWCHIVE ->
                 extractPawchiveMedia(normalizedUrl, resolvedUrl)
+            MediaPlatform.TORRENT ->
+                extractDotTorrentMedia(normalizedUrl, resolvedUrl, probe)
             MediaPlatform.INSTAGRAM ->
                 extractInstagramMedia(normalizedUrl, resolvedUrl)
             MediaPlatform.FACEBOOK ->
@@ -183,6 +197,133 @@ class MediaExtractionEngine(
                 )
         }
         return enrichMediaInfoWithDetailedFormats(rawInfo)
+    }
+
+    private fun extractMagnetTorrentMedia(magnetUrl: String): MediaInfo {
+        val magnet = try {
+            TorrentEngine.parseMagnetUri(magnetUrl)
+        } catch (e: Exception) {
+            throw ExtractorException(DownloaderErrorType.INVALID_URL, e.message ?: "Invalid magnet link.", e)
+        }
+        val title = magnet.displayName?.takeIf { it.isNotBlank() }
+            ?: "Torrent_${magnet.infoHashHex.take(10)}"
+        val p2pOption = MediaFormatOption(
+            id = "torrent_p2p_payload",
+            qualityLabel = "Download Torrent Content (P2P / Magnet)",
+            container = "torrent",
+            mimeType = "application/x-bittorrent",
+            contentLengthBytes = -1L,
+            isEstimatedSize = true,
+            isAudioOnly = false,
+            isOriginalBest = true,
+            streamUrl = magnetUrl,
+            formatCategory = "Torrent",
+            isGenericFile = true,
+            fileCategoryLabel = "Magnet P2P (${magnet.trackers.size} trackers)"
+        )
+        return MediaInfo(
+            originalUrl = magnetUrl,
+            canonicalUrl = magnetUrl,
+            title = title,
+            creator = "${magnet.trackers.size} Trackers • ${magnet.webSeeds.size} WebSeeds",
+            durationSeconds = 0L,
+            durationFormatted = "Torrent P2P",
+            thumbnailUrl = "",
+            platform = MediaPlatform.TORRENT,
+            videoFormats = emptyList(),
+            audioFormats = emptyList(),
+            fileFormats = listOf(p2pOption),
+            extractorSource = "Dragon BitTorrent / Magnet Extractor"
+        )
+    }
+
+    private fun extractDotTorrentMedia(
+        originalUrl: String,
+        canonicalUrl: String,
+        probe: StreamProbeResult?
+    ): MediaInfo {
+        val headers = buildCookieHeaders(canonicalUrl)
+        var parsedMeta: TorrentEngine.TorrentMetadata? = null
+        var torrentBytesSize: Long = probe?.contentLength ?: -1L
+        try {
+            val req = Request.Builder()
+                .url(canonicalUrl)
+                .header("User-Agent", MOBILE_USER_AGENT)
+                .apply { headers.forEach { (k, v) -> header(k, v) } }
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val bytes = resp.body?.bytes()
+                    if (bytes != null && bytes.isNotEmpty() && bytes.size <= 4 * 1024 * 1024) {
+                        torrentBytesSize = bytes.size.toLong()
+                        parsedMeta = TorrentEngine.parseTorrentBytes(bytes)
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        val fallbackName = (probe?.filenameFromHeader
+            ?: canonicalUrl.substringBefore("?").substringAfterLast("/"))
+            .substringBeforeLast(".")
+            .ifBlank { "Torrent_Download" }
+
+        val meta = parsedMeta
+        val title = meta?.name?.takeIf { it.isNotBlank() } ?: fallbackName
+        val formats = buildList {
+            if (meta != null) {
+                add(
+                    MediaFormatOption(
+                        id = "torrent_p2p_payload",
+                        qualityLabel = "Download Torrent Content (${meta.files.size} file(s))",
+                        container = "torrent",
+                        mimeType = "application/x-bittorrent",
+                        contentLengthBytes = meta.totalBytes,
+                        isEstimatedSize = meta.totalBytes <= 0L,
+                        isAudioOnly = false,
+                        isOriginalBest = true,
+                        streamUrl = canonicalUrl,
+                        requestHeaders = headers,
+                        formatCategory = "Torrent",
+                        isGenericFile = true,
+                        fileCategoryLabel = "Torrent Payload (${meta.trackers.size} trackers)"
+                    )
+                )
+            }
+            add(
+                MediaFormatOption(
+                    id = "torrent_metadata_file",
+                    qualityLabel = "Save .torrent Metadata File (.torrent)",
+                    container = "torrent",
+                    mimeType = "application/x-bittorrent",
+                    contentLengthBytes = torrentBytesSize,
+                    isEstimatedSize = torrentBytesSize <= 0L,
+                    isAudioOnly = false,
+                    isOriginalBest = meta == null,
+                    streamUrl = canonicalUrl,
+                    requestHeaders = headers,
+                    formatCategory = "Torrent",
+                    isGenericFile = true,
+                    fileCategoryLabel = "Torrent File (.torrent)"
+                )
+            )
+        }
+
+        return MediaInfo(
+            originalUrl = originalUrl,
+            canonicalUrl = canonicalUrl,
+            title = title,
+            creator = meta?.let { "${it.files.size} files • ${it.trackers.size} trackers" }
+                ?: (runCatching { URI(canonicalUrl).host?.removePrefix("www.") }.getOrNull() ?: "Torrent"),
+            durationSeconds = 0L,
+            durationFormatted = meta?.let { "${it.files.size} file(s)" } ?: "Torrent File",
+            thumbnailUrl = "",
+            platform = MediaPlatform.TORRENT,
+            videoFormats = emptyList(),
+            audioFormats = emptyList(),
+            fileFormats = formats,
+            extractorSource = "Dragon BitTorrent Extractor"
+        )
     }
 
     private fun isBinaryMediaMime(
@@ -236,6 +377,8 @@ class MediaExtractionEngine(
             "application/x-bittorrent",
             "application/java-archive",
             "application/wasm",
+            "application/x-subrip",
+            "text/vtt",
             "text/csv"
         )
         if (lowerMime in downloadableAppMimes ||
@@ -5659,16 +5802,14 @@ class MediaExtractionEngine(
     private fun classifyFileCategory(ext: String, mime: String): String {
         val dot = ".$ext"
         return when {
-            dot in MediaPlatform.ARCHIVE_EXTENSIONS || mime.contains("zip") || mime.contains("rar") || mime.contains("7z") || mime.contains("tar") || mime.contains("gzip") -> "Archive"
-            ext in setOf("apk", "apks", "xapk", "obb") || mime.contains("android.package-archive") -> "Android App"
-            dot in MediaPlatform.INSTALLER_EXTENSIONS -> "Installer / App"
-            dot in MediaPlatform.DISK_IMAGE_AND_BIN_EXTENSIONS -> "Disk Image / Binary"
-            ext in setOf("xls", "xlsx", "csv") -> "Spreadsheet"
-            ext in setOf("epub", "mobi") -> "E-Book"
+            ext == "torrent" || mime.contains("bittorrent") -> "Torrent"
+            dot in MediaPlatform.SUBTITLE_EXTENSIONS || mime == "text/vtt" || mime.contains("subrip") -> "Subtitle"
+            dot in MediaPlatform.ARCHIVE_EXTENSIONS || mime.contains("zip") || mime.contains("rar") || mime.contains("7z") || mime.contains("tar") || mime.contains("gzip") -> "Compressed"
+            dot in MediaPlatform.INSTALLER_EXTENSIONS || mime.contains("android.package-archive") || mime.contains("msdownload") -> "Program"
             dot in MediaPlatform.DOCUMENT_EXTENSIONS || mime.contains("pdf") -> "Document"
-            dot in MediaPlatform.IMAGE_AND_FONT_EXTENSIONS && ext !in setOf("ttf", "otf", "woff2") -> "Image"
-            ext in setOf("ttf", "otf", "woff2") -> "Font"
-            else -> "Binary File"
+            dot in MediaPlatform.IMAGE_EXTENSIONS || mime.startsWith("image/") -> "Photo"
+            dot in MediaPlatform.FONT_EXTENSIONS -> "Other"
+            else -> "Other"
         }
     }
 
@@ -5698,6 +5839,8 @@ class MediaExtractionEngine(
             "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> "pptx"
             "application/epub+zip" -> "epub"
             "application/x-bittorrent" -> "torrent"
+            "application/x-subrip" -> "srt"
+            "text/vtt" -> "vtt"
             "application/java-archive" -> "jar"
             "application/wasm" -> "wasm"
             "application/json" -> "json"
@@ -5741,6 +5884,9 @@ class MediaExtractionEngine(
             "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
             "epub" -> "application/epub+zip"
             "torrent" -> "application/x-bittorrent"
+            "srt" -> "application/x-subrip"
+            "vtt" -> "text/vtt"
+            "ass", "ssa", "sub", "lrc", "smi", "sbv" -> "text/plain"
             "jar" -> "application/java-archive"
             "wasm" -> "application/wasm"
             "json" -> "application/json"

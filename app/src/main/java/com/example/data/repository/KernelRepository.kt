@@ -326,6 +326,9 @@ class KernelRepository private constructor(private val context: Context) {
             }
             context.startService(intent)
         } catch (_: Exception) {}
+        try {
+            downloadManager.notificationController.syncTasks(downloadManager.tasksFlow.value, force = true)
+        } catch (_: Exception) {}
     }
 
     private fun updateThemeConfig(transform: (ThemeCustomizationConfig) -> ThemeCustomizationConfig) {
@@ -8314,6 +8317,7 @@ class KernelRepository private constructor(private val context: Context) {
         val activeLayers = countActiveXposedLayers(cfg)
         val summaryPrefix = if (isLspActive) "Xposed (${activeLayers}/5 Hooks) + " else ""
         _adBlockerTelemetryFlow.value = cur.copy(
+            isActive = cfg.isGlobalEnabled || cur.isAutoTriggered,
             activeDnsSpecifier = status.activeDnsHost,
             activeHostsEntriesCount = status.activeHostsCount,
             isHostsSinkholeVerified = status.isHostsSinkholeVerified,
@@ -8342,11 +8346,11 @@ class KernelRepository private constructor(private val context: Context) {
     private fun loadAdBlockerPrefs(): AdBlockerConfig {
         return try {
             val (prefs, _) = com.example.xposed.DragonXposedModule.openAdBlockerSharedPrefs(context)
-            if (!prefs.getBoolean("adblock_default_off_v1", false)) {
+            if (!prefs.getBoolean("adblock_default_off_v2", false)) {
                 prefs.edit()
                     .putBoolean("adblock_global_enabled", false)
                     .putBoolean("adblock_auto_activate", false)
-                    .putBoolean("adblock_default_off_v1", true)
+                    .putBoolean("adblock_default_off_v2", true)
                     .apply()
             }
             val modeName = prefs.getString("adblock_mode", AdBlockerMode.HYBRID_ROOT_DNS.name)

@@ -117,7 +117,7 @@ fun openAppStoragePermissionSettings(context: Context) {
 /**
  * Confirmation pop-up window displayed before starting any file/media download.
  * Verifies & requests storage permission, ensures Internal Storage > Download > DDM exists,
- * allows renaming and choosing IDM parallel connection threads, then launches the download.
+ * allows renaming and choosing DDM parallel connection threads, then launches the download.
  */
 @Composable
 fun StartDownloadPopupDialog(
@@ -409,7 +409,7 @@ fun StartDownloadPopupDialog(
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
-                                text = "IDM THREADS",
+                                text = "DDM THREADS",
                                 fontSize = 9.5.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
@@ -497,20 +497,15 @@ fun StartDownloadPopupDialog(
                                     tint = if (warpDnsEnabled) WarningOrange else MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(15.dp)
                                 )
-                                Column {
-                                    Text(
-                                        text = if (warpDnsEnabled) "Cloudflare WARP DNS (1.1.1.1) • ON"
-                                        else "Cloudflare WARP DNS (1.1.1.1) • OFF",
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (warpDnsEnabled) WarningOrange else MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = "Accelerated DoH + 0ms multi-thread DNS cache",
-                                        fontSize = 9.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                                Text(
+                                    text = if (warpDnsEnabled) "Cloudflare WARP DNS (1.1.1.1) • ON" else "Cloudflare WARP DNS (1.1.1.1) • OFF",
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (warpDnsEnabled) WarningOrange else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                             Switch(
                                 checked = warpDnsEnabled,
@@ -664,7 +659,7 @@ fun StartBatchDownloadPopupDialog(
                     }
                 }
                 Text(
-                    text = "Concurrent Workers: ${config.maxConcurrentDownloads} • IDM Threads: ${downloadManager.maxConnectionsFlow.value}x",
+                    text = "Concurrent Workers: ${config.maxConcurrentDownloads} • DDM Threads: ${downloadManager.maxConnectionsFlow.value}x",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

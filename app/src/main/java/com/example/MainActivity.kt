@@ -22,6 +22,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,7 +40,9 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -61,15 +64,21 @@ class MainActivity : ComponentActivity() {
 
     private val repository by lazy { KernelRepository.getInstance(applicationContext) }
 
+    private val openDownloaderSignal = kotlinx.coroutines.flow.MutableStateFlow(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         ensureMaxAppRefreshRateWindow()
+        if (intent?.getBooleanExtra(com.example.receiver.DownloadNotificationReceiver.EXTRA_OPEN_DOWNLOADER_TAB, false) == true) {
+            openDownloaderSignal.value += 1
+        }
 
         setContent {
             val accentIndex by repository.accentColorIndexFlow.collectAsState()
             val isAmoledBlack by repository.isAmoledBlackFlow.collectAsState()
             val themeConfig by repository.themeConfigFlow.collectAsState()
+            val downloaderNavTrigger by openDownloaderSignal.collectAsState()
 
             DragonKernelTheme(
                 accentIndex = accentIndex,
@@ -102,11 +111,20 @@ class MainActivity : ComponentActivity() {
                 }
 
                 DragonKernelMainScreen(
-                    repository = repository
+                    repository = repository,
+                    openDownloaderTrigger = downloaderNavTrigger
                 )
             }
         }
         ensureMaxAppRefreshRateWindow()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(com.example.receiver.DownloadNotificationReceiver.EXTRA_OPEN_DOWNLOADER_TAB, false)) {
+            openDownloaderSignal.value += 1
+        }
     }
 
     override fun onResume() {
@@ -201,13 +219,22 @@ enum class NavigationTab(val label: String, val hudCode: String, val icon: Image
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DragonKernelMainScreen(
-    repository: KernelRepository
+    repository: KernelRepository,
+    openDownloaderTrigger: Int = 0
 ) {
     var selectedTab by remember { mutableStateOf(NavigationTab.DASHBOARD) }
     var isBrowserOpen by remember { mutableStateOf(false) }
     var requestedMoreSection by remember { mutableStateOf<Int?>(null) }
     var moreHubResetSignal by remember { mutableIntStateOf(0) }
     var showRedDragonSplash by remember { mutableStateOf(true) }
+
+    LaunchedEffect(openDownloaderTrigger) {
+        if (openDownloaderTrigger > 0) {
+            showRedDragonSplash = false
+            isBrowserOpen = false
+            selectedTab = NavigationTab.DOWNLOADER
+        }
+    }
     val feedbackMessage by repository.lastActionFeedbackFlow.collectAsState()
     val isRootGranted by repository.isRootGrantedFlow.collectAsState()
 
@@ -748,6 +775,16 @@ private fun DragonGamingHudTopBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_dragon_tools_logo),
+                        contentDescription = "Dragon Tools Logo",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = 0.45f), CircleShape)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
                     Box(
                         modifier = Modifier
                             .size(8.dp)
@@ -855,6 +892,16 @@ private fun DragonGamingHudTopBar(
         ) {
             // Left: Dragon Emblem + Root Status
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_dragon_tools_logo),
+                    contentDescription = "Dragon Tools Logo",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .border(1.dp, primaryColor.copy(alpha = 0.6f), CircleShape)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
                 Box(
                     modifier = Modifier
                         .size(8.dp)
