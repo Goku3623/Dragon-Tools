@@ -8778,11 +8778,6 @@ class KernelRepository private constructor(private val context: Context) {
         )
     }
 
-    // In-App Multi-Tab Browser Repository (Google Home, History, Bookmarks, Incognito, Grabber)
-    val browserRepository: com.example.data.browser.BrowserStateRepository by lazy {
-        com.example.data.browser.BrowserStateRepository(context = context)
-    }
-
     fun showActionFeedback(message: String) {
         _lastActionFeedbackFlow.value = message
     }

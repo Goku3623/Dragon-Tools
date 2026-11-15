@@ -269,8 +269,7 @@ fun ToolsScreen(
     requestedSection: Int? = null,
     resetHubSignal: Int = 0,
     onConsumeRequestedSection: () -> Unit = {},
-    onNavigateToMainTab: (Int) -> Unit = {},
-    onOpenBrowser: () -> Unit = {}
+    onNavigateToMainTab: (Int) -> Unit = {}
 ) {
     val context = LocalContext.current
     val haptics = LocalDragonHaptics.current
@@ -393,12 +392,6 @@ fun ToolsScreen(
             )
 
             val xposedAndSystemTools = listOf(
-                MoreLauncherItem(
-                    id = "dragon_browser",
-                    label = "Web Browser",
-                    icon = Icons.Default.Public,
-                    onClick = onOpenBrowser
-                ),
                 MoreLauncherItem(
                     id = "ad_blocker",
                     label = "Ad Blocker",

@@ -83,6 +83,7 @@ class CloudflareWarpDns(
     private val systemDnsFailedHosts = ConcurrentHashMap<String, Boolean>()
     private val forcedTunnelHosts = ConcurrentHashMap.newKeySet<String>()
     private val inFlightPrewarmHosts = ConcurrentHashMap.newKeySet<String>()
+    private val lookupLocks = ConcurrentHashMap<String, Any>()
     private val prewarmExecutor = java.util.concurrent.Executors.newFixedThreadPool(4)
 
     private val resolvedCounter = AtomicInteger(0)
@@ -90,10 +91,13 @@ class CloudflareWarpDns(
     private val blockedCounter = AtomicInteger(0)
     private val lastLatencyMsAtomic = AtomicLong(9L)
 
-    // Adaptive UDP health tracker: if carrier/firewall drops UDP/53, go straight to DoH without waiting
+    // Adaptive UDP & DoH health trackers: avoid stalling WebView threads on blocked networks
     private val udpConsecutiveFailures = AtomicInteger(0)
     @Volatile
     private var udpBypassUntilElapsedMs: Long = 0L
+    private val dohConsecutiveFailures = AtomicInteger(0)
+    @Volatile
+    private var dohBypassUntilElapsedMs: Long = 0L
 
     private val _telemetryFlow = MutableStateFlow(
         WarpDnsTelemetry(
@@ -138,8 +142,35 @@ class CloudflareWarpDns(
         OkHttpClient.Builder()
             .dns(staticDns)
             .connectionPool(ConnectionPool(6, 3, TimeUnit.MINUTES))
-            .connectTimeout(1400, TimeUnit.MILLISECONDS)
-            .readTimeout(1800, TimeUnit.MILLISECONDS)
+            .connectTimeout(900, TimeUnit.MILLISECONDS)
+            .readTimeout(1100, TimeUnit.MILLISECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
+    }
+
+    // Unfiltered redirect-resolver client (uses Cloudflare 1.1.1.1 DoH + System fallback) for unwrapping
+    // HTTP 302 click-tracker links when AdGuard DNS is active so explicit user link taps reach the real destination page.
+    private val redirectResolverClient: OkHttpClient by lazy {
+        val unfilteredDns = object : Dns {
+            override fun lookup(hostname: String): List<InetAddress> {
+                val cleanHost = hostname.trim().lowercase(Locale.US).trimEnd('.')
+                if (cleanHost.isBlank() || cleanHost == "localhost" || isIpLiteral(cleanHost)) {
+                    return Dns.SYSTEM.lookup(hostname)
+                }
+                val cfDoh = queryCloudflareDoh(cleanHost)?.first
+                if (!cfDoh.isNullOrEmpty()) return cfDoh
+                val cfWire = queryAdGuardDohWire(cleanHost, PRIMARY_IPV4)?.addresses
+                if (!cfWire.isNullOrEmpty()) return cfWire
+                return Dns.SYSTEM.lookup(hostname)
+            }
+        }
+        OkHttpClient.Builder()
+            .dns(unfilteredDns)
+            .connectionPool(ConnectionPool(6, 2, TimeUnit.MINUTES))
+            .connectTimeout(3500, TimeUnit.MILLISECONDS)
+            .readTimeout(4500, TimeUnit.MILLISECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
             .retryOnConnectionFailure(true)
             .build()
     }
@@ -148,9 +179,9 @@ class CloudflareWarpDns(
     private val browserTunnelClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .dns(this)
-            .connectionPool(ConnectionPool(16, 3, TimeUnit.MINUTES))
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .connectionPool(ConnectionPool(20, 4, TimeUnit.MINUTES))
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
             .retryOnConnectionFailure(true)
@@ -190,6 +221,8 @@ class CloudflareWarpDns(
         inFlightPrewarmHosts.clear()
         udpConsecutiveFailures.set(0)
         udpBypassUntilElapsedMs = 0L
+        dohConsecutiveFailures.set(0)
+        dohBypassUntilElapsedMs = 0L
         publishTelemetry()
     }
 
@@ -240,20 +273,25 @@ class CloudflareWarpDns(
 
     /**
      * Evaluates on WebView's background network thread whether a browser request should be blocked
-     * by AdGuard DNS (`94.140.14.14`), performing a fast bounded DNS check on uncached 3rd-party hosts.
+     * by AdGuard DNS (`94.140.14.14`). Never blocks or stalls video/audio buffering chunks,
+     * `Range:` byte requests, HLS/DASH manifests, or essential streaming CDNs.
      */
     fun shouldBlockBrowserRequest(
         requestUrl: String,
         requestHost: String?,
         pageHost: String?,
-        isMainFrame: Boolean
+        isMainFrame: Boolean,
+        requestHeaders: Map<String, String>? = null
     ): Boolean {
         if (!isAdGuardDnsEnabled || isEnabled || isUnfilteredAdGuardEnabled) return false
         val host = requestHost?.trim()?.lowercase(Locale.US)?.trimEnd('.') ?: return false
         if (host.isBlank() || host == "localhost" || isIpLiteral(host)) return false
 
-        // Never block legitimate video/audio streaming segments or media players
-        if (isMediaStreamingOrEssentialHost(host) || isLikelyMediaStreamAssetUrl(requestUrl)) {
+        // Never block or stall byte-range media buffering, video/audio MIME requests, or streaming assets
+        if (hasMediaStreamingHeaders(requestHeaders) ||
+            isMediaStreamingOrEssentialHost(host) ||
+            isLikelyMediaStreamAssetUrl(requestUrl)
+        ) {
             return false
         }
 
@@ -275,8 +313,7 @@ class CloudflareWarpDns(
             return false
         }
 
-        // For subresources on third-party hosts, perform a fast AdGuard DNS lookup so even the
-        // first request to a new ad/tracker domain is checked against 94.140.14.14.
+        // For third-party subresources (scripts, frames, ad pixels), check AdGuard DNS without blocking media/HLS fetches.
         if (!isMainFrame && !isSameRegistrableDomain(host, pageHost)) {
             return try {
                 lookup(host)
@@ -347,6 +384,22 @@ class CloudflareWarpDns(
                     ByteArrayInputStream(TRANSPARENT_1X1_GIF)
                 )
             }
+            pathLower.endsWith(".xml") ||
+                requestUrl.contains("vast", ignoreCase = true) ||
+                requestUrl.contains("vmap", ignoreCase = true) ||
+                requestUrl.contains("gampad", ignoreCase = true) ||
+                acceptLower.contains("xml") -> {
+                // Return valid empty VAST XML so video players skip pre-roll ads in 0ms and start buffering immediately
+                val vastBytes = "<VAST version=\"3.0\"></VAST>".toByteArray(Charsets.UTF_8)
+                WebResourceResponse(
+                    "application/xml",
+                    "UTF-8",
+                    200,
+                    "OK",
+                    headers,
+                    ByteArrayInputStream(vastBytes)
+                )
+            }
             pathLower.endsWith(".json") || acceptLower.contains("application/json") -> {
                 val jsonBytes = "{}".toByteArray(Charsets.UTF_8)
                 WebResourceResponse(
@@ -413,6 +466,155 @@ class CloudflareWarpDns(
         } catch (_: Throwable) {
             inFlightPrewarmHosts.remove(normalized)
         }
+    }
+
+    /**
+     * Resolves an ad/tracker click-redirect URL asynchronously via HTTP 301/302/303/307/308 `Location`
+     * headers or HTML meta/JS redirects (using unfiltered 1.1.1.1 resolution) so user-clicked links
+     * open their clean destination page even when AdGuard DNS blocks the intermediate click tracker.
+     */
+    fun resolveCleanRedirectAsync(
+        startUrl: String,
+        referer: String?,
+        userAgent: String,
+        onResult: (String?) -> Unit
+    ) {
+        try {
+            prewarmExecutor.execute {
+                val resolved = resolveCleanRedirectDestination(startUrl, referer, userAgent)
+                onResult(resolved)
+            }
+        } catch (_: Throwable) {
+            onResult(extractCleanRedirectTarget(startUrl))
+        }
+    }
+
+    internal fun resolveCleanRedirectDestination(
+        startUrl: String,
+        referer: String?,
+        userAgent: String
+    ): String? {
+        extractCleanRedirectTarget(startUrl)?.let { return it }
+        var currentUrl = startUrl.trim()
+        val cookieManager = runCatching { CookieManager.getInstance() }.getOrNull()
+
+        repeat(6) {
+            val currentHost = runCatching { android.net.Uri.parse(currentUrl).host }.getOrNull()
+            if (!currentHost.isNullOrBlank() && isPurePopunderAdHost(currentHost)) {
+                return null
+            }
+            extractCleanRedirectTarget(currentUrl)?.let { unwrapped ->
+                val unwrappedHost = runCatching { android.net.Uri.parse(unwrapped).host }.getOrNull()
+                if (!unwrappedHost.isNullOrBlank() && !isPurePopunderAdHost(unwrappedHost)) {
+                    return unwrapped
+                }
+            }
+
+            try {
+                val reqBuilder = Request.Builder()
+                    .url(currentUrl)
+                    .header("User-Agent", userAgent.ifBlank { "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 Chrome/125.0.0.0 Mobile Safari/537.36" })
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .header("Range", "bytes=0-8191")
+                    .get()
+                if (!referer.isNullOrBlank() && referer.startsWith("http", ignoreCase = true)) {
+                    reqBuilder.header("Referer", referer)
+                }
+                val cookies = cookieManager?.let { runCatching { it.getCookie(currentUrl) }.getOrNull() }
+                if (!cookies.isNullOrBlank()) {
+                    reqBuilder.header("Cookie", cookies)
+                }
+
+                redirectResolverClient.newCall(reqBuilder.build()).execute().use { resp ->
+                    val code = resp.code
+                    if (code in 300..399) {
+                        val loc = resp.header("Location")?.trim()
+                        if (loc.isNullOrBlank()) return@repeat
+                        val nextUrl = resp.request.url.resolve(loc)?.toString() ?: loc
+                        val nextHost = runCatching { android.net.Uri.parse(nextUrl).host }.getOrNull()
+                        if (nextHost.isNullOrBlank() || isPurePopunderAdHost(nextHost)) {
+                            return null
+                        }
+                        extractCleanRedirectTarget(nextUrl)?.let { return it }
+                        if (!isBuiltInAdGuardSinkholeHost(nextHost) && !isHostSinkholedByAdGuard(nextHost)) {
+                            return nextUrl
+                        }
+                        currentUrl = nextUrl
+                    } else if (code in 200..299) {
+                        val contentType = resp.header("Content-Type")?.lowercase(Locale.US).orEmpty()
+                        if (contentType.contains("html") || contentType.isBlank()) {
+                            val snippetBytes = runCatching {
+                                resp.body?.source()?.let { src ->
+                                    src.request(8192)
+                                    val buf = src.buffer.clone()
+                                    val count = minOf(buf.size, 8192L)
+                                    buf.readByteArray(count)
+                                }
+                            }.getOrNull()
+                            val snippet = snippetBytes?.toString(Charsets.UTF_8).orEmpty()
+                            val metaOrJsNext = extractHtmlRedirectTarget(snippet, currentUrl)
+                            if (!metaOrJsNext.isNullOrBlank()) {
+                                val nextHost = runCatching { android.net.Uri.parse(metaOrJsNext).host }.getOrNull()
+                                if (!nextHost.isNullOrBlank() && !isPurePopunderAdHost(nextHost)) {
+                                    extractCleanRedirectTarget(metaOrJsNext)?.let { return it }
+                                    if (!isBuiltInAdGuardSinkholeHost(nextHost)) {
+                                        return metaOrJsNext
+                                    }
+                                    currentUrl = metaOrJsNext
+                                    return@use
+                                }
+                            }
+                        }
+                        val hostNow = runCatching { android.net.Uri.parse(currentUrl).host }.getOrNull()
+                        return if (!hostNow.isNullOrBlank() && !isPurePopunderAdHost(hostNow) && !isBuiltInAdGuardSinkholeHost(hostNow)) {
+                            currentUrl
+                        } else {
+                            null
+                        }
+                    } else {
+                        return null
+                    }
+                }
+            } catch (_: Throwable) {
+                return null
+            }
+        }
+        val finalHost = runCatching { android.net.Uri.parse(currentUrl).host }.getOrNull()
+        return if (!finalHost.isNullOrBlank() && !isPurePopunderAdHost(finalHost) && !isBuiltInAdGuardSinkholeHost(finalHost)) {
+            currentUrl
+        } else {
+            null
+        }
+    }
+
+    private fun extractHtmlRedirectTarget(htmlSnippet: String, baseUrl: String): String? {
+        if (htmlSnippet.isBlank()) return null
+        val metaRegex = Regex(
+            """<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]+content\s*=\s*["'][^"']*?url\s*=\s*([^"'\s>]+)["']?""",
+            setOf(RegexOption.IGNORE_CASE)
+        )
+        val metaMatch = metaRegex.find(htmlSnippet)?.groupValues?.getOrNull(1)?.trim()
+        if (!metaMatch.isNullOrBlank()) {
+            val resolved = resolveRelativeHttpUrl(baseUrl, metaMatch)
+            if (resolved != null) return resolved
+        }
+        val jsLocationRegex = Regex(
+            """(?:window\.|top\.|self\.)?location(?:\.href)?\s*(?:=|\.replace\(|\.assign\()\s*["'](https?://[^"']+)["']""",
+            setOf(RegexOption.IGNORE_CASE)
+        )
+        val jsMatch = jsLocationRegex.find(htmlSnippet)?.groupValues?.getOrNull(1)?.trim()
+        if (!jsMatch.isNullOrBlank() && (jsMatch.startsWith("http://", true) || jsMatch.startsWith("https://", true))) {
+            return jsMatch
+        }
+        return null
+    }
+
+    private fun resolveRelativeHttpUrl(baseUrl: String, candidate: String): String? {
+        val clean = candidate.replace("&amp;", "&").trim().removeSurrounding("'").removeSurrounding("\"")
+        if (clean.startsWith("http://", true) || clean.startsWith("https://", true)) return clean
+        return runCatching { java.net.URI(baseUrl).resolve(clean).toString() }
+            .getOrNull()
+            ?.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }
     }
 
     private fun checkIfSystemDnsPoisonedOrFailed(normalizedHost: String) {
@@ -541,12 +743,19 @@ class CloudflareWarpDns(
                     respHeaders[name] = value
                 }
             }
-            // Ensure permissive CORS for video/audio segments and XHR subresources
+            // Ensure permissive CORS and byte-range seek support for video/audio segments and XHR subresources
             if (!isMainFrame) {
                 respHeaders.putIfAbsent("Access-Control-Allow-Origin", "*")
                 respHeaders.putIfAbsent("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
                 respHeaders.putIfAbsent("Access-Control-Allow-Headers", "*")
                 respHeaders.putIfAbsent("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges")
+            }
+            val lowerUrl = finalUrl.lowercase(Locale.US)
+            if (mimeType.startsWith("video/", ignoreCase = true) ||
+                mimeType.startsWith("audio/", ignoreCase = true) ||
+                isLikelyMediaStreamAssetUrl(lowerUrl)
+            ) {
+                respHeaders.putIfAbsent("Accept-Ranges", "bytes")
             }
 
             val statusCode = response.code.coerceIn(100, 599)
@@ -555,13 +764,33 @@ class CloudflareWarpDns(
                     200 -> "OK"
                     206 -> "Partial Content"
                     204 -> "No Content"
+                    304 -> "Not Modified"
                     301, 302, 307, 308 -> "Redirect"
                     404 -> "Not Found"
                     else -> "OK"
                 }
             }
 
-            val bodyStream = response.body?.byteStream() ?: ByteArrayInputStream(ByteArray(0))
+            val bodyStream = if (statusCode == 204 || statusCode == 304) {
+                runCatching { response.close() }
+                ByteArrayInputStream(ByteArray(0))
+            } else {
+                val rawStream = response.body?.byteStream()
+                if (rawStream == null) {
+                    runCatching { response.close() }
+                    ByteArrayInputStream(ByteArray(0))
+                } else {
+                    object : java.io.FilterInputStream(rawStream) {
+                        override fun close() {
+                            try {
+                                super.close()
+                            } finally {
+                                runCatching { response.close() }
+                            }
+                        }
+                    }
+                }
+            }
             WebResourceResponse(
                 mimeType,
                 charset,
@@ -624,147 +853,183 @@ class CloudflareWarpDns(
             }
         }
 
-        val startMs = SystemClock.elapsedRealtime()
-        val resolvedAddresses = LinkedHashSet<InetAddress>()
-        var ttlSeconds = DEFAULT_TTL_SECONDS
-        var sinkholed = false
-        val tryUdpFirst = SystemClock.elapsedRealtime() >= udpBypassUntilElapsedMs
+        val lock = lookupLocks.computeIfAbsent(normalizedHost) { Any() }
+        synchronized(lock) {
+            val rechecked = dnsCache[normalizedHost]
+            val recheckNow = SystemClock.elapsedRealtime()
+            if (rechecked != null && recheckNow < rechecked.expiresAtElapsedMs) {
+                if (rechecked.isSinkholed && useAdGuardDefault) {
+                    cacheHitCounter.incrementAndGet()
+                    publishTelemetry()
+                    throw UnknownHostException("Blocked by AdGuard DNS (94.140.14.14): $hostname")
+                }
+                if (rechecked.addresses.isNotEmpty()) {
+                    cacheHitCounter.incrementAndGet()
+                    publishTelemetry()
+                    return rechecked.addresses
+                }
+            }
 
-        if (useAdGuardDefault) {
-            // 1. Fast UDP/53 query to AdGuard Default DNS (94.140.14.14 / 94.140.15.15)
-            if (tryUdpFirst) {
-                val udpResult = queryDnsUdpWire(hostname, ADGUARD_DEFAULT_PRIMARY_BYTES)
-                    ?: queryDnsUdpWire(hostname, ADGUARD_DEFAULT_SECONDARY_BYTES)
-                if (udpResult != null && !udpResult.isTruncated) {
-                    udpConsecutiveFailures.set(0)
-                    if (udpResult.isSinkholed && !isMediaStreamingOrEssentialHost(normalizedHost)) {
-                        sinkholed = true
-                        ttlSeconds = udpResult.ttlSeconds
-                    } else if (udpResult.addresses.isNotEmpty()) {
+            val startMs = SystemClock.elapsedRealtime()
+            val resolvedAddresses = LinkedHashSet<InetAddress>()
+            var ttlSeconds = DEFAULT_TTL_SECONDS
+            var sinkholed = false
+            val tryUdpFirst = SystemClock.elapsedRealtime() >= udpBypassUntilElapsedMs
+            val tryDoh = SystemClock.elapsedRealtime() >= dohBypassUntilElapsedMs
+
+            if (useAdGuardDefault) {
+                // 1. Fast UDP/53 query to AdGuard Default DNS (94.140.14.14)
+                if (tryUdpFirst) {
+                    val udpResult = queryDnsUdpWire(hostname, ADGUARD_DEFAULT_PRIMARY_BYTES)
+                    if (udpResult != null && !udpResult.isTruncated) {
+                        udpConsecutiveFailures.set(0)
+                        if (udpResult.isSinkholed && !isMediaStreamingOrEssentialHost(normalizedHost)) {
+                            sinkholed = true
+                            ttlSeconds = udpResult.ttlSeconds
+                        } else if (udpResult.addresses.isNotEmpty()) {
+                            resolvedAddresses.addAll(udpResult.addresses)
+                            ttlSeconds = udpResult.ttlSeconds
+                        }
+                    } else if (udpResult == null) {
+                        recordUdpFailure()
+                    }
+                }
+
+                // 2. AdGuard Default DoH (https://dns.adguard-dns.com/dns-query) if UDP was blocked/truncated/empty
+                if (resolvedAddresses.isEmpty() && !sinkholed && tryDoh) {
+                    val dohResult = queryAdGuardDohWire(hostname, ADGUARD_DEFAULT_HOST)
+                    if (dohResult != null) {
+                        dohConsecutiveFailures.set(0)
+                        if (dohResult.isSinkholed && !isMediaStreamingOrEssentialHost(normalizedHost)) {
+                            sinkholed = true
+                            ttlSeconds = dohResult.ttlSeconds
+                        } else if (dohResult.addresses.isNotEmpty()) {
+                            resolvedAddresses.addAll(dohResult.addresses)
+                            ttlSeconds = dohResult.ttlSeconds
+                        }
+                    } else {
+                        recordDohFailure()
+                    }
+                }
+            } else if (useAdGuardUnfiltered) {
+                // 1. Fast UDP/53 query to Unfiltered AdGuard DNS (94.140.14.140 / 94.140.14.141)
+                if (tryUdpFirst) {
+                    val udpResult = queryDnsUdpWire(hostname, ADGUARD_UNFILTERED_PRIMARY_BYTES)
+                        ?: queryDnsUdpWire(hostname, ADGUARD_UNFILTERED_SECONDARY_BYTES)
+                    if (udpResult != null && !udpResult.isTruncated && udpResult.addresses.isNotEmpty()) {
+                        udpConsecutiveFailures.set(0)
                         resolvedAddresses.addAll(udpResult.addresses)
                         ttlSeconds = udpResult.ttlSeconds
+                    } else if (udpResult == null) {
+                        recordUdpFailure()
                     }
-                } else if (udpResult == null) {
-                    recordUdpFailure()
                 }
-            }
 
-            // 2. AdGuard Default DoH (https://dns.adguard-dns.com/dns-query) if UDP was blocked/truncated/empty
-            if (resolvedAddresses.isEmpty() && !sinkholed) {
-                val dohResult = queryAdGuardDohWire(hostname, ADGUARD_DEFAULT_HOST)
-                if (dohResult != null) {
-                    if (dohResult.isSinkholed && !isMediaStreamingOrEssentialHost(normalizedHost)) {
-                        sinkholed = true
-                        ttlSeconds = dohResult.ttlSeconds
-                    } else if (dohResult.addresses.isNotEmpty()) {
+                // 2. Unfiltered AdGuard DoH (https://unfiltered.adguard-dns.com/dns-query)
+                if (resolvedAddresses.isEmpty() && tryDoh) {
+                    val dohResult = queryAdGuardDohWire(hostname, ADGUARD_UNFILTERED_HOST)
+                    if (dohResult != null && dohResult.addresses.isNotEmpty()) {
+                        dohConsecutiveFailures.set(0)
                         resolvedAddresses.addAll(dohResult.addresses)
                         ttlSeconds = dohResult.ttlSeconds
+                    } else {
+                        recordDohFailure()
+                    }
+                }
+            } else {
+                // 1. Fast UDP/53 query to Cloudflare WARP DNS (1.1.1.1 / 1.0.0.1)
+                if (tryUdpFirst) {
+                    val udpResult = queryDnsUdpWire(hostname, PRIMARY_IPV4_BYTES)
+                        ?: queryDnsUdpWire(hostname, SECONDARY_IPV4_BYTES)
+                    if (udpResult != null && !udpResult.isTruncated && udpResult.addresses.isNotEmpty()) {
+                        udpConsecutiveFailures.set(0)
+                        resolvedAddresses.addAll(udpResult.addresses)
+                        ttlSeconds = udpResult.ttlSeconds
+                    } else if (udpResult == null) {
+                        recordUdpFailure()
+                    }
+                }
+
+                // 2. Cloudflare DoH (JSON API + RFC 8484 Wireformat fallback)
+                if (resolvedAddresses.isEmpty() && tryDoh) {
+                    val dohResult = queryCloudflareDoh(hostname)
+                    if (dohResult != null && dohResult.first.isNotEmpty()) {
+                        dohConsecutiveFailures.set(0)
+                        resolvedAddresses.addAll(dohResult.first)
+                        ttlSeconds = dohResult.second
+                    } else {
+                        val wireDoh = queryAdGuardDohWire(hostname, PRIMARY_IPV4)
+                        if (wireDoh != null && wireDoh.addresses.isNotEmpty()) {
+                            dohConsecutiveFailures.set(0)
+                            resolvedAddresses.addAll(wireDoh.addresses)
+                            ttlSeconds = wireDoh.ttlSeconds
+                        } else {
+                            recordDohFailure()
+                        }
                     }
                 }
             }
-        } else if (useAdGuardUnfiltered) {
-            // 1. Fast UDP/53 query to Unfiltered AdGuard DNS (94.140.14.140 / 94.140.14.141)
-            if (tryUdpFirst) {
-                val udpResult = queryDnsUdpWire(hostname, ADGUARD_UNFILTERED_PRIMARY_BYTES)
-                    ?: queryDnsUdpWire(hostname, ADGUARD_UNFILTERED_SECONDARY_BYTES)
-                if (udpResult != null && !udpResult.isTruncated && udpResult.addresses.isNotEmpty()) {
-                    udpConsecutiveFailures.set(0)
-                    resolvedAddresses.addAll(udpResult.addresses)
-                    ttlSeconds = udpResult.ttlSeconds
-                } else if (udpResult == null) {
-                    recordUdpFailure()
-                }
+
+            val elapsed = (SystemClock.elapsedRealtime() - startMs).coerceAtLeast(1L)
+            lastLatencyMsAtomic.set(elapsed)
+
+            // If AdGuard DNS (94.140.14.14) sinkholed this domain, cache the sinkhole and do NOT fall back to System DNS!
+            if (sinkholed && useAdGuardDefault) {
+                val boundedTtlMs = (ttlSeconds.coerceIn(60L, 600L)) * 1000L
+                dnsCache[normalizedHost] = CachedDnsEntry(
+                    addresses = emptyList(),
+                    expiresAtElapsedMs = SystemClock.elapsedRealtime() + boundedTtlMs,
+                    isSinkholed = true
+                )
+                resolvedCounter.incrementAndGet()
+                blockedCounter.incrementAndGet()
+                publishTelemetry()
+                throw UnknownHostException("Blocked by AdGuard DNS (94.140.14.14): $hostname")
             }
 
-            // 2. Unfiltered AdGuard DoH (https://unfiltered.adguard-dns.com/dns-query)
+            // 3. Only fall back to System DNS if Custom DNS returned no addresses (e.g. local LAN host or offline)
             if (resolvedAddresses.isEmpty()) {
-                val dohResult = queryAdGuardDohWire(hostname, ADGUARD_UNFILTERED_HOST)
-                if (dohResult != null && dohResult.addresses.isNotEmpty()) {
-                    resolvedAddresses.addAll(dohResult.addresses)
-                    ttlSeconds = dohResult.ttlSeconds
-                }
-            }
-        } else {
-            // 1. Fast UDP/53 query to Cloudflare WARP DNS (1.1.1.1 / 1.0.0.1)
-            if (tryUdpFirst) {
-                val udpResult = queryDnsUdpWire(hostname, PRIMARY_IPV4_BYTES)
-                    ?: queryDnsUdpWire(hostname, SECONDARY_IPV4_BYTES)
-                if (udpResult != null && !udpResult.isTruncated && udpResult.addresses.isNotEmpty()) {
-                    udpConsecutiveFailures.set(0)
-                    resolvedAddresses.addAll(udpResult.addresses)
-                    ttlSeconds = udpResult.ttlSeconds
-                } else if (udpResult == null) {
-                    recordUdpFailure()
-                }
-            }
-
-            // 2. Cloudflare DoH (JSON API + RFC 8484 Wireformat fallback)
-            if (resolvedAddresses.isEmpty()) {
-                val dohResult = queryCloudflareDoh(hostname)
-                if (dohResult != null && dohResult.first.isNotEmpty()) {
-                    resolvedAddresses.addAll(dohResult.first)
-                    ttlSeconds = dohResult.second
-                } else {
-                    val wireDoh = queryAdGuardDohWire(hostname, PRIMARY_IPV4)
-                    if (wireDoh != null && wireDoh.addresses.isNotEmpty()) {
-                        resolvedAddresses.addAll(wireDoh.addresses)
-                        ttlSeconds = wireDoh.ttlSeconds
+                val sysAddrs = Dns.SYSTEM.lookup(hostname)
+                sysAddrs.forEach { addr ->
+                    if (!isBogonOrSinkholeAddress(addr)) {
+                        resolvedAddresses.add(InetAddress.getByAddress(hostname, addr.address))
                     }
                 }
+                if (resolvedAddresses.isEmpty()) {
+                    return sysAddrs
+                }
             }
-        }
 
-        val elapsed = (SystemClock.elapsedRealtime() - startMs).coerceAtLeast(1L)
-        lastLatencyMsAtomic.set(elapsed)
+            // Prioritize IPv4 addresses first (Happy Eyeballs) to avoid broken IPv6 carrier routes
+            val sorted = resolvedAddresses.sortedBy { addr ->
+                if (addr is Inet4Address) 0 else 1
+            }
 
-        // If AdGuard DNS (94.140.14.14) sinkholed this domain, cache the sinkhole and do NOT fall back to System DNS!
-        if (sinkholed && useAdGuardDefault) {
+            resolvedCounter.incrementAndGet()
             val boundedTtlMs = (ttlSeconds.coerceIn(60L, 600L)) * 1000L
             dnsCache[normalizedHost] = CachedDnsEntry(
-                addresses = emptyList(),
+                addresses = sorted,
                 expiresAtElapsedMs = SystemClock.elapsedRealtime() + boundedTtlMs,
-                isSinkholed = true
+                isSinkholed = false
             )
-            resolvedCounter.incrementAndGet()
-            blockedCounter.incrementAndGet()
             publishTelemetry()
-            throw UnknownHostException("Blocked by AdGuard DNS (94.140.14.14): $hostname")
+            return sorted
         }
-
-        // 3. Only fall back to System DNS if Custom DNS returned no addresses (e.g. local LAN host or offline)
-        if (resolvedAddresses.isEmpty()) {
-            val sysAddrs = Dns.SYSTEM.lookup(hostname)
-            sysAddrs.forEach { addr ->
-                if (!isBogonOrSinkholeAddress(addr)) {
-                    resolvedAddresses.add(InetAddress.getByAddress(hostname, addr.address))
-                }
-            }
-            if (resolvedAddresses.isEmpty()) {
-                return sysAddrs
-            }
-        }
-
-        // Prioritize IPv4 addresses first (Happy Eyeballs) to avoid broken IPv6 carrier routes
-        val sorted = resolvedAddresses.sortedBy { addr ->
-            if (addr is Inet4Address) 0 else 1
-        }
-
-        resolvedCounter.incrementAndGet()
-        val boundedTtlMs = (ttlSeconds.coerceIn(60L, 600L)) * 1000L
-        dnsCache[normalizedHost] = CachedDnsEntry(
-            addresses = sorted,
-            expiresAtElapsedMs = SystemClock.elapsedRealtime() + boundedTtlMs,
-            isSinkholed = false
-        )
-        publishTelemetry()
-        return sorted
     }
 
     private fun recordUdpFailure() {
         val fails = udpConsecutiveFailures.incrementAndGet()
-        if (fails >= 2) {
-            // Carrier/router blocks UDP port 53 -> use encrypted DoH directly for next 2 minutes
-            udpBypassUntilElapsedMs = SystemClock.elapsedRealtime() + 120_000L
+        if (fails >= 1) {
+            // Carrier/router blocks UDP port 53 -> use encrypted DoH directly for next 10 minutes
+            udpBypassUntilElapsedMs = SystemClock.elapsedRealtime() + 600_000L
+        }
+    }
+
+    private fun recordDohFailure() {
+        val fails = dohConsecutiveFailures.incrementAndGet()
+        if (fails >= 3) {
+            // Avoid stalling WebView resource loading if remote DoH endpoint is unreachable on current network
+            dohBypassUntilElapsedMs = SystemClock.elapsedRealtime() + 45_000L
         }
     }
 
@@ -939,7 +1204,52 @@ class CloudflareWarpDns(
             "github.com",
             "githubusercontent.com",
             "archive.org",
-            "mega.nz"
+            "mega.nz",
+            "b-cdn.net",
+            "bunnycdn.com",
+            "bunnyinfra.net",
+            "cloudflarestorage.com",
+            "workers.dev",
+            "pages.dev",
+            "mux.com",
+            "stream.mux.com",
+            "bitmovin.com",
+            "theoplayer.com",
+            "videojs.com",
+            "plyr.io",
+            "dashjs.org",
+            "cdn77.org",
+            "gcorelabs.com",
+            "hwcdn.net",
+            "stackpathdns.com",
+            "edgecastcdn.net",
+            "llnwd.net",
+            "brightcove.net",
+            "brightcovecdn.com",
+            "kaltura.com",
+            "wistia.com",
+            "wistia.net",
+            "vidyard.com",
+            "rumble.com",
+            "odysee.com",
+            "kick.com",
+            "twitchcdn.net",
+            "vidcdn.net",
+            "streamtape.com",
+            "filemoon.sx",
+            "doodstream.com",
+            "mixdrop.co",
+            "mp4upload.com",
+            "fonts.googleapis.com",
+            "fonts.gstatic.com",
+            "ajax.googleapis.com",
+            "code.jquery.com",
+            "use.fontawesome.com",
+            "maxcdn.bootstrapcdn.com",
+            "stackpath.bootstrapcdn.com",
+            "challenges.cloudflare.com",
+            "hcaptcha.com",
+            "recaptcha.net"
         )
 
         // High-precision AdGuard DNS sinkhole domain suffixes for 0ms ad/tracker/popunder blocking when AdGuard DNS (94.140.14.14) is active
@@ -1031,23 +1341,177 @@ class CloudflareWarpDns(
             return false
         }
 
+        fun hasMediaStreamingHeaders(requestHeaders: Map<String, String>?): Boolean {
+            if (requestHeaders.isNullOrEmpty()) return false
+            for ((k, v) in requestHeaders) {
+                if (k.equals("Range", ignoreCase = true) || k.equals("If-Range", ignoreCase = true)) {
+                    return true
+                }
+                if (k.equals("Accept", ignoreCase = true)) {
+                    val low = v.lowercase(Locale.US)
+                    if (low.contains("video/") ||
+                        low.contains("audio/") ||
+                        low.contains("mpegurl") ||
+                        low.contains("dash+xml") ||
+                        low.contains("mp2t")
+                    ) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        fun isPurePopunderAdHost(host: String): Boolean {
+            val h = host.trim().lowercase(Locale.US).trimEnd('.')
+            val popunderRoots = listOf(
+                "popads.net",
+                "popcash.net",
+                "propellerads.com",
+                "adsterra.com",
+                "exoclick.com",
+                "exosrv.com",
+                "juicyads.com",
+                "trafficjunky.net",
+                "trafficjunky.com",
+                "hilltopads.net",
+                "clickadu.com",
+                "adsco.re",
+                "adtng.com",
+                "realsrv.com",
+                "tsyndicate.com",
+                "trafficstars.com"
+            )
+            return popunderRoots.any { root -> h == root || h.endsWith(".$root") } ||
+                h.startsWith("popunder.")
+        }
+
+        /**
+         * Unwraps ad/tracker click-redirect links (e.g. `?adurl=https://...`, `?url=https://...`,
+         * `?redirect=https://...`, base64-encoded targets, or semicolon-embedded URLs) so tapping a link
+         * containing an ad wrapper navigates directly to the clean destination instead of failing to load.
+         */
+        fun extractCleanRedirectTarget(rawUrl: String): String? {
+            var current = rawUrl.trim()
+            val redirectParamKeys = setOf(
+                "adurl", "url", "u", "q", "redirect", "redirect_url", "redirect_uri",
+                "redir", "dest", "destination", "target", "goto", "link", "out",
+                "next", "to", "r", "linkurl", "ds_dest_url", "surl", "murl", "clickurl",
+                "data", "ref_url", "continue"
+            )
+            repeat(5) {
+                val uri = runCatching { android.net.Uri.parse(current) }.getOrNull() ?: return@repeat
+                val candidateFromQuery = runCatching {
+                    uri.queryParameterNames.firstNotNullOfOrNull { key ->
+                        val rawVal = uri.getQueryParameter(key)?.trim()
+                        if (!rawVal.isNullOrBlank() && key.lowercase(Locale.US) in redirectParamKeys) {
+                            decodePossibleWrappedHttpUrl(rawVal)
+                        } else if (rawVal.isNullOrBlank() &&
+                            (key.startsWith("http://", true) || key.startsWith("https://", true))
+                        ) {
+                            key.trim()
+                        } else {
+                            null
+                        }
+                    }
+                }.getOrNull()
+
+                // DoubleClick & ad servers sometimes append the target URL after ';' or '?' directly (e.g. `;https://...`)
+                val candidateInline = if (candidateFromQuery.isNullOrBlank()) {
+                    val semiIdx = current.indexOf(";http", ignoreCase = true)
+                    if (semiIdx >= 0) {
+                        val sub = current.substring(semiIdx + 1).trim()
+                        decodePossibleWrappedHttpUrl(sub)
+                    } else {
+                        val qHttpIdx = current.indexOf("?http", ignoreCase = true)
+                        if (qHttpIdx >= 0) {
+                            decodePossibleWrappedHttpUrl(current.substring(qHttpIdx + 1).trim())
+                        } else {
+                            null
+                        }
+                    }
+                } else {
+                    candidateFromQuery
+                }
+
+                val nextCandidate = candidateInline ?: return@repeat
+                val candidateHost = runCatching { android.net.Uri.parse(nextCandidate).host }.getOrNull().orEmpty()
+                if (candidateHost.isNotBlank() && nextCandidate != current) {
+                    current = nextCandidate
+                } else {
+                    return@repeat
+                }
+            }
+            if (current == rawUrl.trim()) return null
+            val finalHost = runCatching { android.net.Uri.parse(current).host }.getOrNull()
+            if (finalHost.isNullOrBlank() || isBuiltInAdGuardSinkholeHost(finalHost)) return null
+            return current
+        }
+
+        private fun decodePossibleWrappedHttpUrl(rawValue: String): String? {
+            var candidate = rawValue.trim()
+            if (candidate.startsWith("http://", true) || candidate.startsWith("https://", true)) {
+                return candidate
+            }
+            // Handle double percent-encoded URLs (e.g. https%3A%2F%2F...)
+            if (candidate.startsWith("http%3a", true) || candidate.startsWith("https%3a", true)) {
+                val decoded = runCatching { java.net.URLDecoder.decode(candidate, "UTF-8") }.getOrNull()?.trim()
+                if (!decoded.isNullOrBlank() && (decoded.startsWith("http://", true) || decoded.startsWith("https://", true))) {
+                    return decoded
+                }
+            }
+            // Handle base64 / URL-safe base64 wrapped URLs (e.g. aHR0cHM6Ly8...)
+            if (candidate.length >= 12 && (candidate.startsWith("aHR0cDov") || candidate.startsWith("aHR0cHM6"))) {
+                val normalizedB64 = candidate.replace('-', '+').replace('_', '/')
+                val padded = normalizedB64.padEnd(((normalizedB64.length + 3) / 4) * 4, '=')
+                val decodedBytes = runCatching {
+                    android.util.Base64.decode(padded, android.util.Base64.DEFAULT)
+                }.getOrNull()
+                val decodedText = decodedBytes?.toString(Charsets.UTF_8)?.trim()
+                if (!decodedText.isNullOrBlank() &&
+                    (decodedText.startsWith("http://", true) || decodedText.startsWith("https://", true))
+                ) {
+                    return decodedText
+                }
+            }
+            return null
+        }
+
         fun isLikelyMediaStreamAssetUrl(url: String): Boolean {
-            val lower = url.substringBefore('?').lowercase(Locale.US)
-            return lower.endsWith(".m3u8") ||
-                lower.endsWith(".mpd") ||
-                lower.endsWith(".ts") ||
-                lower.endsWith(".m4s") ||
-                lower.endsWith(".mp4") ||
-                lower.endsWith(".webm") ||
-                lower.endsWith(".mkv") ||
-                lower.endsWith(".mov") ||
-                lower.endsWith(".mp3") ||
-                lower.endsWith(".m4a") ||
-                lower.endsWith(".aac") ||
-                lower.endsWith(".flac") ||
-                lower.endsWith(".ogg") ||
-                lower.endsWith(".vtt") ||
-                lower.endsWith(".srt")
+            val fullLower = url.lowercase(Locale.US)
+            val pathLower = fullLower.substringBefore('?')
+            return pathLower.endsWith(".m3u8") ||
+                pathLower.endsWith(".mpd") ||
+                pathLower.endsWith(".ts") ||
+                pathLower.endsWith(".m4s") ||
+                pathLower.endsWith(".m4f") ||
+                pathLower.endsWith(".fmp4") ||
+                pathLower.endsWith(".mp4") ||
+                pathLower.endsWith(".m4v") ||
+                pathLower.endsWith(".webm") ||
+                pathLower.endsWith(".mkv") ||
+                pathLower.endsWith(".mov") ||
+                pathLower.endsWith(".avi") ||
+                pathLower.endsWith(".flv") ||
+                pathLower.endsWith(".mp3") ||
+                pathLower.endsWith(".m4a") ||
+                pathLower.endsWith(".aac") ||
+                pathLower.endsWith(".opus") ||
+                pathLower.endsWith(".flac") ||
+                pathLower.endsWith(".ogg") ||
+                pathLower.endsWith(".vtt") ||
+                pathLower.endsWith(".srt") ||
+                pathLower.endsWith(".key") ||
+                fullLower.contains("/hls/") ||
+                fullLower.contains("/dash/") ||
+                fullLower.contains("/videoplayback") ||
+                fullLower.contains("mime=video") ||
+                fullLower.contains("mime=audio") ||
+                fullLower.contains("playlist.m3u8") ||
+                fullLower.contains("master.m3u8") ||
+                fullLower.contains("chunklist") ||
+                fullLower.contains("/seg-") ||
+                fullLower.contains("/frag-")
         }
 
         fun isSameRegistrableDomain(hostA: String?, hostB: String?): Boolean {
@@ -1151,7 +1615,7 @@ class CloudflareWarpDns(
 
                 val packetBytes = buildDnsQueryPacket(labels, qType = 1)
                 DatagramSocket().use { socket ->
-                    socket.soTimeout = 500
+                    socket.soTimeout = 250
                     val serverAddr = InetAddress.getByAddress(serverIpBytes)
                     val outPacket = DatagramPacket(packetBytes, packetBytes.size, serverAddr, 53)
                     socket.send(outPacket)

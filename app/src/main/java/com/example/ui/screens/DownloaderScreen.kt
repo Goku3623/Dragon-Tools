@@ -68,8 +68,7 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloaderScreen(
-    repository: KernelRepository,
-    onOpenBrowser: () -> Unit = {}
+    repository: KernelRepository
 ) {
     val context = LocalContext.current
     val haptics = LocalDragonHaptics.current
@@ -302,19 +301,6 @@ fun DownloaderScreen(
                             }
 
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(
-                                    onClick = {
-                                        haptics.tap()
-                                        onOpenBrowser()
-                                    },
-                                    modifier = Modifier.testTag("downloader_open_browser_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Public,
-                                        contentDescription = "Open Dragon Browser (google.com)",
-                                        tint = NeonCyan
-                                    )
-                                }
                                 IconButton(
                                     onClick = {
                                         haptics.tap()

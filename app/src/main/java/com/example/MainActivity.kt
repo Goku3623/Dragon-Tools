@@ -223,7 +223,6 @@ fun DragonKernelMainScreen(
     openDownloaderTrigger: Int = 0
 ) {
     var selectedTab by remember { mutableStateOf(NavigationTab.DASHBOARD) }
-    var isBrowserOpen by remember { mutableStateOf(false) }
     var requestedMoreSection by remember { mutableStateOf<Int?>(null) }
     var moreHubResetSignal by remember { mutableIntStateOf(0) }
     var showRedDragonSplash by remember { mutableStateOf(true) }
@@ -231,7 +230,6 @@ fun DragonKernelMainScreen(
     LaunchedEffect(openDownloaderTrigger) {
         if (openDownloaderTrigger > 0) {
             showRedDragonSplash = false
-            isBrowserOpen = false
             selectedTab = NavigationTab.DOWNLOADER
         }
     }
@@ -246,7 +244,7 @@ fun DragonKernelMainScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Return to Dashboard on Back press from secondary tabs
-    BackHandler(enabled = !isBrowserOpen && selectedTab != NavigationTab.DASHBOARD) {
+    BackHandler(enabled = selectedTab != NavigationTab.DASHBOARD) {
         haptics.tabSelect()
         selectedTab = NavigationTab.DASHBOARD
     }
@@ -284,10 +282,6 @@ fun DragonKernelMainScreen(
                         haptics.tap()
                         requestedMoreSection = 0
                         selectedTab = NavigationTab.MORE
-                    },
-                    onBrowserClick = {
-                        haptics.tap()
-                        isBrowserOpen = true
                     }
                 )
             },
@@ -495,8 +489,7 @@ fun DragonKernelMainScreen(
                     NavigationTab.FRAMEGEN -> FrameGenScreen(repository = repository)
                     NavigationTab.VISUAL_STYLE -> VisualStyleScreen(repository = repository)
                     NavigationTab.DOWNLOADER -> DownloaderScreen(
-                        repository = repository,
-                        onOpenBrowser = { isBrowserOpen = true }
+                        repository = repository
                     )
                     NavigationTab.MORE -> ToolsScreen(
                         repository = repository,
@@ -511,24 +504,14 @@ fun DragonKernelMainScreen(
                                 5 -> NavigationTab.VISUAL_STYLE
                                 else -> NavigationTab.DASHBOARD
                             }
-                        },
-                        onOpenBrowser = { isBrowserOpen = true }
+                        }
                     )
                     NavigationTab.ABOUT -> AboutScreen(repository = repository)
                 }
             }
         }
 
-        if (isBrowserOpen) {
-            BrowserScreen(
-                repository = repository,
-                onCloseBrowser = { isBrowserOpen = false },
-                onOpenDownloadsTab = {
-                    isBrowserOpen = false
-                    selectedTab = NavigationTab.DOWNLOADER
-                }
-            )
-        }
+
 
         if (showRedDragonSplash) {
             DragonSplashScreen(
@@ -721,8 +704,7 @@ private fun DragonGamingHudTopBar(
     isRootGranted: Boolean,
     isLiquidGlass: Boolean = false,
     refractionIntensity: Float = 0.85f,
-    onFpsClick: () -> Unit,
-    onBrowserClick: () -> Unit
+    onFpsClick: () -> Unit
 ) {
     val currentFps by repository.currentFpsFlow.collectAsState()
     val cpuTemp by repository.cpuTempFlow.collectAsState()
@@ -810,35 +792,6 @@ private fun DragonGamingHudTopBar(
                             .clip(RoundedCornerShape(12.dp))
                             .background(Color.White.copy(alpha = 0.16f))
                             .border(1.dp, Color.White.copy(alpha = 0.38f), RoundedCornerShape(12.dp))
-                            .clickable(onClick = onBrowserClick)
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                            .testTag("hud_browser_button")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Public,
-                                contentDescription = "Open Dragon Browser",
-                                tint = NeonCyan,
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Text(
-                                text = "WEB",
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White
-                            )
-                        }
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.White.copy(alpha = 0.16f))
-                            .border(1.dp, Color.White.copy(alpha = 0.38f), RoundedCornerShape(12.dp))
                             .clickable(onClick = onFpsClick)
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                             .testTag("hud_fps_pill")
@@ -918,47 +871,11 @@ private fun DragonGamingHudTopBar(
                 )
             }
 
-            // Right: Browser Launch Pill + Live Telemetry Pills (FPS + Temp)
+            // Right: Live Telemetry Pills (FPS + Temp)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(if (isMaterial3Bar) 12.dp else 8.dp))
-                        .background(
-                            if (isMaterial3Bar) MaterialTheme.colorScheme.primaryContainer
-                            else NeonCyan.copy(alpha = 0.14f)
-                        )
-                        .border(
-                            width = if (isMaterial3Bar) 0.8.dp else 1.dp,
-                            color = if (isMaterial3Bar) MaterialTheme.colorScheme.outlineVariant else NeonCyan.copy(alpha = 0.45f),
-                            shape = RoundedCornerShape(if (isMaterial3Bar) 12.dp else 8.dp)
-                        )
-                        .clickable(onClick = onBrowserClick)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                        .testTag("hud_browser_button")
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Public,
-                            contentDescription = "Open Dragon Browser",
-                            tint = if (isMaterial3Bar) MaterialTheme.colorScheme.onPrimaryContainer else NeonCyan,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Text(
-                            text = "WEB",
-                            fontSize = 10.sp,
-                            fontFamily = if (isMaterial3Bar) FontFamily.SansSerif else FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isMaterial3Bar) MaterialTheme.colorScheme.onPrimaryContainer else NeonCyan
-                        )
-                    }
-                }
-
                 // Live FPS Pill
                 Box(
                     modifier = Modifier
