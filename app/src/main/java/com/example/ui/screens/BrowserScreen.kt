@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
@@ -8,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
@@ -60,6 +64,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import com.example.ui.haptics.LocalDragonHaptics
 import androidx.compose.ui.platform.testTag
@@ -112,6 +117,12 @@ private const val MOBILE_USER_AGENT =
 private const val DESKTOP_USER_AGENT =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 @Composable
 fun BrowserScreen(
     repository: KernelRepository,
@@ -119,6 +130,7 @@ fun BrowserScreen(
     onOpenDownloadsTab: () -> Unit
 ) {
     val context = LocalContext.current
+    val localView = LocalView.current
     val focusManager = LocalFocusManager.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val haptics = LocalDragonHaptics.current
@@ -158,8 +170,39 @@ fun BrowserScreen(
     var fullscreenCustomView by remember { mutableStateOf<View?>(null) }
     var fullscreenCustomViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
+    // Track which browser tabs are actively playing or streaming video so mobile screen never turns off
+    val playingVideoByTab = remember { mutableStateMapOf<String, Boolean>() }
+
     // WebView registry keyed by tab.id
     val webViews = remember { mutableStateMapOf<String, WebView>() }
+
+    val isVideoStreamingOrPlaying = remember(
+        activeTab.id,
+        playingVideoByTab[activeTab.id],
+        fullscreenCustomView,
+        activeInlineStreamPlayer
+    ) {
+        (playingVideoByTab[activeTab.id] == true) ||
+            (fullscreenCustomView != null) ||
+            (activeInlineStreamPlayer != null)
+    }
+
+    // Keep mobile screen awake whenever any video is playing/streaming inline, in fullscreen, or in the universal stream player
+    DisposableEffect(isVideoStreamingOrPlaying, activeTab.id) {
+        val window = context.findActivity()?.window
+        localView.keepScreenOn = isVideoStreamingOrPlaying
+        webViews[activeTab.id]?.keepScreenOn = isVideoStreamingOrPlaying
+        fullscreenCustomView?.keepScreenOn = isVideoStreamingOrPlaying
+        if (isVideoStreamingOrPlaying) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            localView.keepScreenOn = false
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     // SAF File Picker for importing extensions (.zip, .crx, .xpi, .user.js, .js, .css, manifest.json) from local storage
     val extensionFilePickerLauncher = rememberLauncherForActivityResult(
@@ -215,9 +258,11 @@ fun BrowserScreen(
     }
 
     fun closeBrowserTab(tabId: String) {
+        playingVideoByTab.remove(tabId)
         val wasLastIncognito = browserRepo.closeTab(tabId)
         webViews.remove(tabId)?.let { wv ->
             try {
+                wv.keepScreenOn = false
                 wv.stopLoading()
                 (wv.parent as? ViewGroup)?.removeView(wv)
                 if (wasLastIncognito) {
@@ -631,15 +676,21 @@ fun BrowserScreen(
                                 longPressedLinkUrl = url
                             },
                             onShowFullscreenVideo = { view, callback ->
+                                view.keepScreenOn = true
                                 fullscreenCustomView = view
                                 fullscreenCustomViewCallback = callback
+                                playingVideoByTab[activeTab.id] = true
                             },
                             onHideFullscreenVideo = {
+                                fullscreenCustomView?.keepScreenOn = false
                                 fullscreenCustomView = null
                                 fullscreenCustomViewCallback = null
                             },
                             onOpenInlineStreamPlayer = { streamUrl, title ->
                                 activeInlineStreamPlayer = streamUrl to title
+                            },
+                            onVideoPlaybackStateChanged = { tabId, isPlaying ->
+                                playingVideoByTab[tabId] = isPlaying
                             }
                         ).also { created ->
                             webViews[targetId] = created
@@ -680,6 +731,7 @@ fun BrowserScreen(
                                 modifier = Modifier.fillMaxSize(),
                                 factory = { ctx ->
                                     FrameLayout(ctx).apply {
+                                        keepScreenOn = true
                                         setBackgroundColor(android.graphics.Color.BLACK)
                                         layoutParams = ViewGroup.LayoutParams(
                                             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -688,6 +740,8 @@ fun BrowserScreen(
                                     }
                                 },
                                 update = { fsContainer ->
+                                    fsContainer.keepScreenOn = true
+                                    customVideoView.keepScreenOn = true
                                     if (fsContainer.childCount != 1 || fsContainer.getChildAt(0) !== customVideoView) {
                                         fsContainer.removeAllViews()
                                         (customVideoView.parent as? ViewGroup)?.removeView(customVideoView)
@@ -1652,7 +1706,8 @@ private fun createConfiguredBrowserWebView(
     onLongPressLink: (String) -> Unit = {},
     onShowFullscreenVideo: (View, WebChromeClient.CustomViewCallback?) -> Unit = { _, _ -> },
     onHideFullscreenVideo: () -> Unit = {},
-    onOpenInlineStreamPlayer: (streamUrl: String, title: String) -> Unit = { _, _ -> }
+    onOpenInlineStreamPlayer: (streamUrl: String, title: String) -> Unit = { _, _ -> },
+    onVideoPlaybackStateChanged: (tabId: String, isPlaying: Boolean) -> Unit = { _, _ -> }
 ): WebView {
     val autoRetriedUrls = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     return WebView(context).apply {
@@ -1753,6 +1808,14 @@ private fun createConfiguredBrowserWebView(
                     if (streamUrl.isBlank() || !streamUrl.startsWith("http", ignoreCase = true)) return
                     mainHandler.post {
                         onOpenInlineStreamPlayer(streamUrl.trim(), label.ifBlank { tab.title })
+                    }
+                }
+
+                @JavascriptInterface
+                fun onVideoPlaybackStateChanged(isPlaying: Boolean) {
+                    mainHandler.post {
+                        this@apply.keepScreenOn = isPlaying
+                        onVideoPlaybackStateChanged(tab.id, isPlaying)
                     }
                 }
             },
@@ -2090,6 +2153,10 @@ private fun createConfiguredBrowserWebView(
                                     sourceLabel = hostLabel
                                 )
                             )
+                            if (detectedKind == GrabbedMediaKind.VIDEO) {
+                                this@apply.keepScreenOn = true
+                                onVideoPlaybackStateChanged(tab.id, true)
+                            }
                         }
                     }
                 }
@@ -2134,6 +2201,8 @@ private fun createConfiguredBrowserWebView(
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 if (!url.isNullOrBlank()) {
+                    view?.keepScreenOn = false
+                    onVideoPlaybackStateChanged(tab.id, false)
                     val host = runCatching { Uri.parse(url).host }.getOrNull()
                     if (isCustomDnsActiveProvider() && !host.isNullOrBlank()) {
                         warpDns.prewarmHostAsync(host)
@@ -2885,6 +2954,7 @@ private fun BrowserUniversalStreamPlayerDialog(
                         modifier = Modifier.fillMaxSize(),
                         factory = { ctx ->
                             WebView(ctx).apply {
+                                keepScreenOn = true
                                 setBackgroundColor(android.graphics.Color.BLACK)
                                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
                                 settings.apply {
@@ -3035,6 +3105,30 @@ private const val UNIVERSAL_VIDEO_STREAM_ENHANCER_JS = """
         }
 
         (function(videoEl) {
+          var notifyPlaybackState = function() {
+            try {
+              var allVideos = document.querySelectorAll('video');
+              var anyActive = !!(document.fullscreenElement || document.webkitFullscreenElement);
+              for (var k = 0; k < allVideos.length; k++) {
+                var item = allVideos[k];
+                if (!item.paused && !item.ended) {
+                  anyActive = true;
+                  break;
+                }
+              }
+              if (window.__dragonLastVideoWakeState !== anyActive) {
+                window.__dragonLastVideoWakeState = anyActive;
+                if (window.DragonBrowserBridge && window.DragonBrowserBridge.onVideoPlaybackStateChanged) {
+                  window.DragonBrowserBridge.onVideoPlaybackStateChanged(anyActive);
+                }
+              }
+            } catch (e) {}
+          };
+
+          ['play', 'playing', 'waiting', 'seeking', 'timeupdate', 'pause', 'ended', 'emptied'].forEach(function(evtName) {
+            videoEl.addEventListener(evtName, notifyPlaybackState, { passive: true });
+          });
+
           function tryHlsRecovery() {
             var src = videoEl.currentSrc || videoEl.src || '';
             if (!src) {
@@ -3074,7 +3168,50 @@ private const val UNIVERSAL_VIDEO_STREAM_ENHANCER_JS = """
       }
     }
 
+    // Bridge W3C Screen Wake Lock API (navigator.wakeLock.request('screen')) to native Android keepScreenOn
+    if (!navigator.wakeLock) {
+      navigator.wakeLock = {
+        request: function(type) {
+          if (window.DragonBrowserBridge && window.DragonBrowserBridge.onVideoPlaybackStateChanged) {
+            window.DragonBrowserBridge.onVideoPlaybackStateChanged(true);
+          }
+          return Promise.resolve({
+            released: false,
+            type: type || 'screen',
+            release: function() {
+              this.released = true;
+              if (window.DragonBrowserBridge && window.DragonBrowserBridge.onVideoPlaybackStateChanged) {
+                window.DragonBrowserBridge.onVideoPlaybackStateChanged(false);
+              }
+              return Promise.resolve();
+            },
+            addEventListener: function() {},
+            removeEventListener: function() {}
+          });
+        }
+      };
+    }
+
     enhanceVideosAndFrames();
+    setInterval(function() {
+      try {
+        enhanceVideosAndFrames();
+        var vids = document.querySelectorAll('video');
+        var active = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        for (var i = 0; i < vids.length; i++) {
+          if (!vids[i].paused && !vids[i].ended) {
+            active = true;
+            break;
+          }
+        }
+        if (window.__dragonLastVideoWakeState !== active) {
+          window.__dragonLastVideoWakeState = active;
+          if (window.DragonBrowserBridge && window.DragonBrowserBridge.onVideoPlaybackStateChanged) {
+            window.DragonBrowserBridge.onVideoPlaybackStateChanged(active);
+          }
+        }
+      } catch (e) {}
+    }, 1500);
     var obs = new MutationObserver(function() { enhanceVideosAndFrames(); });
     if (document.documentElement) {
       obs.observe(document.documentElement, { childList: true, subtree: true });
